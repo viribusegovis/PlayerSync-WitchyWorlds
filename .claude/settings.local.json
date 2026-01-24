@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep:*)",
+      "Bash(./gradlew:*)",
+      "Bash(.gradlew build)",
+      "Bash(gradlew.bat build:*)",
+      "Bash(java:*)",
+      "Bash(where java)",
+      "Bash(echo $JAVA_HOME)",
+      "Bash(reg query:*)",
+      "Bash(set JAVA_HOME=\"C:\\Program Files\\Java\\jdk-21\")",
+      "Bash(\"C:\\Program Files\\Java\\jdk-21\\bin\\java.exe\" -version)",
+      "Bash(set PATH=\"C:\\Program Files\\Java\\jdk-21\\bin;%PATH%\")",
+      "Bash(export:*)",
+      "Bash(git init:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(rm:*)"
+    ],
+    "deny": []
+  }
+}
