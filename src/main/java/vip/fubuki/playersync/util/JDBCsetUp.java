@@ -16,18 +16,31 @@ public class JDBCsetUp {
    private static final Logger LOGGER = LogUtils.getLogger();
    private static final ConcurrentLinkedQueue<Connection> connectionPool = new ConcurrentLinkedQueue<>();
    private static final AtomicInteger activeConnections = new AtomicInteger(0);
-   private static final int MAX_POOL_SIZE = 10;
-   private static final int MAX_RETRIES = 3;
 
    public static Connection getPooledConnection(boolean selectDatabase) throws SQLException {
+      // Debug mode connection pool logging
+      if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+         LOGGER.info("[DEBUG] Requesting connection (selectDB={}). Pool size: {}, Active: {} (Max: {})", 
+            selectDatabase, connectionPool.size(), activeConnections.get(), JdbcConfig.CONNECTION_POOL_MAX_SIZE.get());
+      }
+      
+      int maxPoolSize = JdbcConfig.CONNECTION_POOL_MAX_SIZE.get();
+      int poolTimeout = JdbcConfig.CONNECTION_POOL_TIMEOUT.get();
+      
       Connection conn = connectionPool.poll();
       if (conn == null || conn.isClosed()) {
-         if (activeConnections.get() >= 10) {
-            LOGGER.warn("Connection pool exhausted, waiting for available connection...");
+         if (activeConnections.get() >= maxPoolSize) {
+            LOGGER.warn("Connection pool exhausted (Active: {}/{}), waiting {}ms for available connection...", 
+               activeConnections.get(), maxPoolSize, poolTimeout);
 
             try {
-               Thread.sleep(100L);
+               Thread.sleep(poolTimeout);
                conn = connectionPool.poll();
+               
+               if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+                  LOGGER.info("[DEBUG] After {}ms wait, pool status - Size: {}, Active: {}", 
+                     poolTimeout, connectionPool.size(), activeConnections.get());
+               }
             } catch (InterruptedException var3) {
                Thread.currentThread().interrupt();
             }
@@ -37,7 +50,13 @@ public class JDBCsetUp {
             conn = createNewConnection(selectDatabase);
             activeConnections.incrementAndGet();
             LOGGER.debug("Created new pooled connection. Active: {}", activeConnections.get());
+            
+            if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+               LOGGER.info("[DEBUG] Created new connection. Total active: {}", activeConnections.get());
+            }
          }
+      } else if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+         LOGGER.info("[DEBUG] Reused pooled connection. Remaining in pool: {}", connectionPool.size());
       }
 
       return conn;
@@ -45,12 +64,23 @@ public class JDBCsetUp {
 
    public static void returnConnection(Connection conn) {
       if (conn != null) {
+         int maxPoolSize = JdbcConfig.CONNECTION_POOL_MAX_SIZE.get();
          try {
-            if (!conn.isClosed() && connectionPool.size() < 10) {
+            if (!conn.isClosed() && connectionPool.size() < maxPoolSize) {
                connectionPool.offer(conn);
+               
+               if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+                  LOGGER.info("[DEBUG] Returned connection to pool. Pool size: {}, Active: {}", 
+                     connectionPool.size(), activeConnections.get());
+               }
             } else {
                conn.close();
                activeConnections.decrementAndGet();
+               
+               if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+                  LOGGER.info("[DEBUG] Closed connection (pool full or connection closed). Active: {}", 
+                     activeConnections.get());
+               }
             }
          } catch (SQLException var2) {
             LOGGER.warn("Error returning connection to pool", var2);
@@ -88,6 +118,12 @@ public class JDBCsetUp {
    public static QueryResult executeQuery(String sqlFormatString, Object... args) throws SQLException {
       String sql = String.format(sqlFormatString, args);
       LOGGER.trace(sql);
+      
+      // Debug mode logging
+      if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+         LOGGER.info("[DEBUG] Executing query: {}", sql);
+      }
+      
       Connection connection = getConnection();
       PreparedStatement queryStatement = connection.prepareStatement(sql);
       ResultSet resultSet = queryStatement.executeQuery();
@@ -97,6 +133,12 @@ public class JDBCsetUp {
    private static void executeUpdate(boolean selectDatabase, String sqlFormatString, Object... args) throws SQLException {
       String sql = String.format(sqlFormatString, args);
       LOGGER.trace(sql);
+      
+      // Debug mode logging
+      if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+         LOGGER.info("[DEBUG] Executing update (selectDB={}): {}", selectDatabase, sql);
+      }
+      
       Connection connection = null;
 
       try {

@@ -28,6 +28,21 @@ public class JdbcConfig {
    public static IntValue CHAT_SERVER_PORT;
    public static BooleanValue USE_LEGACY_SERIALIZATION;
    public static ConfigValue<Integer> SERVER_ID;
+   
+   // Database Schema Configuration
+   public static ConfigValue<String> PLAYER_INVENTORY_TYPE;
+   public static ConfigValue<String> PLAYER_ADVANCEMENTS_TYPE;
+   public static ConfigValue<String> COBBLEMON_PC_TYPE;
+   public static ConfigValue<String> COBBLEMON_POKEDEX_TYPE;
+   public static ConfigValue<String> BACKPACK_NBT_TYPE;
+   
+   // Debug Configuration
+   public static BooleanValue DEBUG_MODE;
+   
+   // Connection Pool Configuration
+   public static IntValue CONNECTION_POOL_MAX_SIZE;
+   public static IntValue CONNECTION_POOL_TIMEOUT;
+   public static IntValue CONNECTION_POOL_RETRY_ATTEMPTS;
 
    static {
       Builder COMMON_BUILDER = new Builder();
@@ -63,7 +78,91 @@ public class JdbcConfig {
             "Override the description of placeholder items which are unavailable on the current server."
          )
          .define("item_placeholder_description_override", "");
+
       COMMON_BUILDER.pop();
+
+      // Database Schema Configuration
+      COMMON_BUILDER.comment("Database column types for large data storage").push("database_schema");
+      PLAYER_INVENTORY_TYPE = COMMON_BUILDER.comment(
+            new String[]{
+               "Database column type for player inventory data",
+               "Options: BLOB (64KB), MEDIUMBLOB (16MB), LONGBLOB (4GB)",
+               "LONGBLOB recommended for large modded inventories"
+            }
+         ).define("player_inventory_type", "LONGBLOB");
+      
+      PLAYER_ADVANCEMENTS_TYPE = COMMON_BUILDER.comment(
+            new String[]{
+               "Database column type for player advancements data",
+               "Options: BLOB (64KB), MEDIUMBLOB (16MB), LONGBLOB (4GB)", 
+               "LONGBLOB recommended for extensive modded progression"
+            }
+         ).define("player_advancements_type", "LONGBLOB");
+      
+      COBBLEMON_PC_TYPE = COMMON_BUILDER.comment(
+            new String[]{
+               "Database column type for Cobblemon PC storage",
+               "Options: BLOB (64KB), MEDIUMBLOB (16MB), LONGBLOB (4GB)",
+               "LONGBLOB recommended for large Pokemon collections"
+            }
+         ).define("cobblemon_pc_type", "LONGBLOB");
+      
+      COBBLEMON_POKEDEX_TYPE = COMMON_BUILDER.comment(
+            new String[]{
+               "Database column type for Cobblemon Pokedex data", 
+               "Options: BLOB (64KB), MEDIUMBLOB (16MB), LONGBLOB (4GB)",
+               "MEDIUMBLOB usually sufficient for Pokedex data"
+            }
+         ).define("cobblemon_pokedex_type", "MEDIUMBLOB");
+      
+      BACKPACK_NBT_TYPE = COMMON_BUILDER.comment(
+            new String[]{
+               "Database column type for Sophisticated Backpacks NBT data",
+               "Options: BLOB (64KB), MEDIUMBLOB (16MB), LONGBLOB (4GB)",
+               "LONGBLOB recommended for nested backpack storage"
+            }
+         ).define("backpack_nbt_type", "LONGBLOB");
+
+      COMMON_BUILDER.pop();
+
+      // Debug Configuration  
+      COMMON_BUILDER.comment("Debug and development settings").push("debug");
+      DEBUG_MODE = COMMON_BUILDER.comment(
+            new String[]{
+               "Enable debug mode for verbose logging",
+               "Shows detailed database operations, connection pool stats, and data processing",
+               "WARNING: May generate large log files - use only for troubleshooting"
+            }
+         ).define("debug_mode", false);
+      COMMON_BUILDER.pop();
+
+      // Connection Pool Configuration
+      COMMON_BUILDER.comment("Database connection pool settings").push("connection_pool");
+      CONNECTION_POOL_MAX_SIZE = COMMON_BUILDER.comment(
+            new String[]{
+               "Maximum number of database connections in the pool",
+               "Higher values allow more concurrent operations but use more memory",
+               "10 connections is usually sufficient for most servers"
+            }
+         ).defineInRange("max_pool_size", 10, 1, 50);
+      
+      CONNECTION_POOL_TIMEOUT = COMMON_BUILDER.comment(
+            new String[]{
+               "Time to wait (in milliseconds) when connection pool is exhausted",
+               "100ms provides good balance between responsiveness and server load",
+               "Lower values = more responsive but higher CPU usage"
+            }
+         ).defineInRange("pool_timeout_ms", 100, 50, 5000);
+      
+      CONNECTION_POOL_RETRY_ATTEMPTS = COMMON_BUILDER.comment(
+            new String[]{
+               "Number of retry attempts for failed database connections",
+               "Higher values improve reliability but may cause delays during outages",
+               "3 attempts is recommended for most setups"
+            }
+         ).defineInRange("retry_attempts", 3, 1, 10);
+      COMMON_BUILDER.pop();
+
       COMMON_CONFIG = COMMON_BUILDER.build();
    }
 }

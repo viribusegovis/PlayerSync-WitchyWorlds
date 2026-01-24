@@ -15,6 +15,7 @@ import vip.fubuki.playersync.PlayerSync;
 import vip.fubuki.playersync.sync.VanillaSync;
 import vip.fubuki.playersync.util.JDBCsetUp;
 import vip.fubuki.playersync.util.LocalJsonUtil;
+import vip.fubuki.playersync.config.JdbcConfig;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -28,7 +29,11 @@ public class ModsSupport {
     public void doBackPackRestore(Player player) {
         if (ModList.get().isLoaded("sophisticatedbackpacks")) {
             // --- Begin Backpack Data Restore ---
-            PlayerSync.LOGGER.info("Restoring backpack data for player " + player.getUUID());
+            if (JdbcConfig.DEBUG_MODE.get()) {
+                PlayerSync.LOGGER.info("[DEBUG] Starting backpack restoration for player {}", player.getUUID());
+            } else {
+                PlayerSync.LOGGER.info("Restoring backpack data for player " + player.getUUID());
+            }
             net.p3pp3rf1y.sophisticatedbackpacks.util.PlayerInventoryProvider.get().runOnBackpacks(player, (ItemStack backpackItem, String handler, String identifier, int slot) -> {
                 net.p3pp3rf1y.sophisticatedbackpacks.backpack.wrapper.IBackpackWrapper backpackWrapper = net.p3pp3rf1y.sophisticatedbackpacks.backpack.wrapper.BackpackWrapper
                         .fromStack(backpackItem);
@@ -37,11 +42,22 @@ public class ModsSupport {
                 Optional<UUID> uuidOpt = backpackWrapper.getContentsUuid();
                 if (uuidOpt.isPresent()) {
                     UUID contentsUuid = uuidOpt.get();
+                    
+                    if (JdbcConfig.DEBUG_MODE.get()) {
+                        PlayerSync.LOGGER.info("[DEBUG] Processing backpack with contents UUID: {} in slot {}", contentsUuid, slot);
+                    }
+                    
                     try {
                         JDBCsetUp.QueryResult qrBackpack = JDBCsetUp.executeQuery("SELECT backpack_nbt FROM backpack_data WHERE uuid='" + contentsUuid + "'");
                         ResultSet rsBackpack = qrBackpack.resultSet();
                         if (rsBackpack.next()) {
                             String serialized = rsBackpack.getString("backpack_nbt");
+                            
+                            if (JdbcConfig.DEBUG_MODE.get()) {
+                                PlayerSync.LOGGER.info("[DEBUG] Found backpack data for UUID {}, serialized length: {}", 
+                                    contentsUuid, serialized != null ? serialized.length() : 0);
+                            }
+                            
                             try {
                                 String nbtString = VanillaSync.deserializeString(serialized);
                                 CompoundTag backpackNbt = NbtUtils.snbtToStructure(nbtString);
@@ -51,16 +67,34 @@ public class ModsSupport {
                                 
                                 // Update BackpackStorage with the safe NBT
                                 net.p3pp3rf1y.sophisticatedbackpacks.backpack.BackpackStorage.get().setBackpackContents(contentsUuid, safeBackpackNbt);
-                                PlayerSync.LOGGER.info("Restored backpack data for UUID " + contentsUuid);
+                                if (JdbcConfig.DEBUG_MODE.get()) {
+                                    PlayerSync.LOGGER.info("[DEBUG] Successfully restored backpack data for UUID {}", contentsUuid);
+                                } else {
+                                    PlayerSync.LOGGER.info("Restored backpack data for UUID " + contentsUuid);
+                                }
                             } catch (CommandSyntaxException e) {
+                                if (JdbcConfig.DEBUG_MODE.get()) {
+                                    PlayerSync.LOGGER.error("[DEBUG] NBT parsing failed for backpack UUID {}: {}. Data preview: {}", 
+                                        contentsUuid, e.getMessage(), 
+                                        serialized.substring(0, Math.min(100, serialized.length())));
+                                }
                                 PlayerSync.LOGGER.error("Error parsing backpack NBT structure for UUID " + contentsUuid + ". Attempting item-by-item recovery.", e);
                                 // Try to recover what we can from the raw serialized data
                                 CompoundTag recoveredNbt = attemptBackpackRecovery(serialized, contentsUuid);
                                 if (recoveredNbt != null) {
                                     net.p3pp3rf1y.sophisticatedbackpacks.backpack.BackpackStorage.get().setBackpackContents(contentsUuid, recoveredNbt);
-                                    PlayerSync.LOGGER.info("Partial recovery successful for backpack UUID " + contentsUuid);
+                                    if (JdbcConfig.DEBUG_MODE.get()) {
+                                        PlayerSync.LOGGER.info("[DEBUG] Partial backpack recovery successful for UUID {}", contentsUuid);
+                                    } else {
+                                        PlayerSync.LOGGER.info("Partial recovery successful for backpack UUID " + contentsUuid);
+                                    }
                                 } else {
-                                    PlayerSync.LOGGER.error("Complete backpack recovery failed for UUID " + contentsUuid + ". Creating empty backpack.");
+                                    if (JdbcConfig.DEBUG_MODE.get()) {
+                                        PlayerSync.LOGGER.error("[DEBUG] Complete backpack recovery failed for UUID {}. Creating empty backpack. Original data size: {}", 
+                                            contentsUuid, serialized.length());
+                                    } else {
+                                        PlayerSync.LOGGER.error("Complete backpack recovery failed for UUID " + contentsUuid + ". Creating empty backpack.");
+                                    }
                                     net.p3pp3rf1y.sophisticatedbackpacks.backpack.BackpackStorage.get().setBackpackContents(contentsUuid, new CompoundTag());
                                 }
                             }
@@ -68,12 +102,23 @@ public class ModsSupport {
                         rsBackpack.close();
                         qrBackpack.connection().close();
                     } catch (SQLException e) {
+                        if (JdbcConfig.DEBUG_MODE.get()) {
+                            PlayerSync.LOGGER.error("[DEBUG] Database error for backpack UUID {}: {}", contentsUuid, e.getMessage());
+                        }
                         PlayerSync.LOGGER.error("Error restoring backpack data for UUID " + contentsUuid, e);
                     } catch (Exception e) {
+                        if (JdbcConfig.DEBUG_MODE.get()) {
+                            PlayerSync.LOGGER.error("[DEBUG] Unexpected error for backpack UUID {}: {} - Error type: {}", 
+                                contentsUuid, e.getMessage(), e.getClass().getSimpleName());
+                        }
                         PlayerSync.LOGGER.error("Error parsing NBT for backpack UUID " + contentsUuid + ". Backpack contents will be lost but inventory is preserved.", e);
                     }
                 } else {
-                    PlayerSync.LOGGER.warn("Backpack item in slot " + slot + " has no contentsUuid during restore");
+                    if (JdbcConfig.DEBUG_MODE.get()) {
+                        PlayerSync.LOGGER.warn("[DEBUG] Backpack item in slot {} has no contentsUuid during restore for player {}", slot, player.getUUID());
+                    } else {
+                        PlayerSync.LOGGER.warn("Backpack item in slot " + slot + " has no contentsUuid during restore");
+                    }
                 }
                 return false;
             });
@@ -126,6 +171,11 @@ public class ModsSupport {
                         }
                         String serialized = entry.getValue();
                         try {
+                            if (JdbcConfig.DEBUG_MODE.get()) {
+                                PlayerSync.LOGGER.info("[DEBUG] Deserializing Curio item for slot {}, data length: {}", 
+                                    compositeKey, serialized.length());
+                            }
+                            
                             String nbtString = VanillaSync.deserializeString(serialized);
                             CompoundTag tag = NbtUtils.snbtToStructure(nbtString);
                             ItemStack stack = ItemStack.parse(ServerLifecycleHooks.getCurrentServer().registryAccess(),tag).get();
@@ -137,9 +187,18 @@ public class ModsSupport {
                                 }
                             }
                         } catch (CommandSyntaxException e) {
+                            if (JdbcConfig.DEBUG_MODE.get()) {
+                                PlayerSync.LOGGER.error("[DEBUG] NBT parsing failed for Curio {}: {}. Data preview: {}", 
+                                    compositeKey, e.getMessage(), 
+                                    serialized.substring(0, Math.min(100, serialized.length())));
+                            }
                             PlayerSync.LOGGER.error("Error deserializing Curio data for key " + compositeKey + ". Skipping this item to prevent inventory loss.", e);
                             // Skip this item instead of crashing - this preserves other items in the inventory
                         } catch (Exception e) {
+                            if (JdbcConfig.DEBUG_MODE.get()) {
+                                PlayerSync.LOGGER.error("[DEBUG] Unexpected Curio error for {}: {} - Error type: {}", 
+                                    compositeKey, e.getMessage(), e.getClass().getSimpleName());
+                            }
                             PlayerSync.LOGGER.error("Unexpected error parsing Curio item for key " + compositeKey + ". Skipping this item to prevent inventory loss.", e);
                             // Skip this item instead of crashing - this preserves other items in the inventory
                         }
@@ -191,7 +250,11 @@ public class ModsSupport {
     }
 
     public static void storeSophisticatedBackpacks(Player player) {
-        PlayerSync.LOGGER.info("Storing backpack data for player " + player.getUUID());
+        if (JdbcConfig.DEBUG_MODE.get()) {
+            PlayerSync.LOGGER.info("[DEBUG] Starting backpack storage for player {}", player.getUUID());
+        } else {
+            PlayerSync.LOGGER.info("Storing backpack data for player " + player.getUUID());
+        }
         net.p3pp3rf1y.sophisticatedbackpacks.util.PlayerInventoryProvider.get().runOnBackpacks(player, (ItemStack backpackItem, String handler, String identifier, int slot) -> {
             net.p3pp3rf1y.sophisticatedbackpacks.backpack.wrapper.IBackpackWrapper backpackWrapper = net.p3pp3rf1y.sophisticatedbackpacks.backpack.wrapper.BackpackWrapper
                     .fromStack(backpackItem);
@@ -200,18 +263,35 @@ public class ModsSupport {
             Optional<UUID> uuidOpt = backpackWrapper.getContentsUuid();
             if (uuidOpt.isPresent()) {
                 UUID contentsUuid = uuidOpt.get();
+                
+                if (JdbcConfig.DEBUG_MODE.get()) {
+                    PlayerSync.LOGGER.info("[DEBUG] Storing backpack with contents UUID: {} in slot {}", contentsUuid, slot);
+                }
+                
                 // Get internal backpack data from BackpackStorage (creates it if missing)
                 CompoundTag backpackNbt = net.p3pp3rf1y.sophisticatedbackpacks.backpack.BackpackStorage.get().getOrCreateBackpackContents(contentsUuid);
                 String serialized = VanillaSync.serialize(backpackNbt.toString());
                 try {
                     // Use REPLACE INTO so existing records are updated
                     JDBCsetUp.executeUpdate("REPLACE INTO backpack_data (uuid, backpack_nbt) VALUES ('" + contentsUuid + "', '" + serialized + "')");
-                    PlayerSync.LOGGER.info("Saved backpack data for UUID " + contentsUuid);
+                    
+                    if (JdbcConfig.DEBUG_MODE.get()) {
+                        PlayerSync.LOGGER.info("[DEBUG] Saved backpack data for UUID {}, serialized size: {} bytes", contentsUuid, serialized.length());
+                    } else {
+                        PlayerSync.LOGGER.info("Saved backpack data for UUID " + contentsUuid);
+                    }
                 } catch (SQLException e) {
+                    if (JdbcConfig.DEBUG_MODE.get()) {
+                        PlayerSync.LOGGER.error("[DEBUG] Database error saving backpack UUID {}: {}", contentsUuid, e.getMessage());
+                    }
                     PlayerSync.LOGGER.error("Error saving backpack data for UUID " + contentsUuid, e);
                 }
             } else {
-                PlayerSync.LOGGER.warn("Backpack item in slot " + slot + " has no contentsUuid");
+                if (JdbcConfig.DEBUG_MODE.get()) {
+                    PlayerSync.LOGGER.warn("[DEBUG] Backpack item in slot {} has no contentsUuid for player {}", slot, player.getUUID());
+                } else {
+                    PlayerSync.LOGGER.warn("Backpack item in slot " + slot + " has no contentsUuid");
+                }
             }
             return false; // Continue processing all backpack items.
         });
@@ -267,7 +347,13 @@ public class ModsSupport {
                             safeItemsList.add(itemCompound.copy());
                             
                         } catch (Exception e) {
-                            PlayerSync.LOGGER.warn("Failed to parse backpack item at index " + i + ", creating placeholder: " + e.getMessage());
+                            if (JdbcConfig.DEBUG_MODE.get()) {
+                                PlayerSync.LOGGER.warn("[DEBUG] Failed to parse backpack item at index {}: {} - Error type: {}. Item ID: {}", 
+                                    i, e.getMessage(), e.getClass().getSimpleName(), 
+                                    itemCompound.contains("id") ? itemCompound.getString("id") : "unknown");
+                            } else {
+                                PlayerSync.LOGGER.warn("Failed to parse backpack item at index " + i + ", creating placeholder: " + e.getMessage());
+                            }
                             
                             // Create a placeholder for this item
                             CompoundTag placeholderTag = createBackpackPlaceholderItem(itemCompound);
@@ -359,7 +445,11 @@ public class ModsSupport {
     private CompoundTag attemptBackpackRecovery(String serializedData, UUID contentsUuid) {
         try {
             // Try manual parsing for common corruption patterns
-            PlayerSync.LOGGER.debug("Attempting manual backpack recovery for UUID " + contentsUuid);
+            if (JdbcConfig.DEBUG_MODE.get()) {
+                PlayerSync.LOGGER.info("[DEBUG] Attempting manual backpack recovery for UUID {}, data size: {} bytes", contentsUuid, serializedData.length());
+            } else {
+                PlayerSync.LOGGER.debug("Attempting manual backpack recovery for UUID " + contentsUuid);
+            }
             
             // Create a minimal valid backpack structure
             CompoundTag recoveredNbt = new CompoundTag();
@@ -393,6 +483,10 @@ public class ModsSupport {
             return recoveredNbt;
             
         } catch (Exception e) {
+            if (JdbcConfig.DEBUG_MODE.get()) {
+                PlayerSync.LOGGER.error("[DEBUG] Backpack recovery attempt failed for UUID {}: {} - Error type: {}", 
+                    contentsUuid, e.getMessage(), e.getClass().getSimpleName());
+            }
             PlayerSync.LOGGER.error("Backpack recovery attempt failed for UUID " + contentsUuid, e);
             return null;
         }

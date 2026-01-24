@@ -371,8 +371,17 @@ public class VanillaSync {
 
     // deserialize item and potentially create placeholders
     private static ItemStack deserializeAndCreatePlaceholderIfNeeded(String serializedNbt) {
+        if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+            PlayerSync.LOGGER.info("[DEBUG] Deserializing item: {} (length: {})", 
+                serializedNbt.substring(0, Math.min(100, serializedNbt.length())) + (serializedNbt.length() > 100 ? "..." : ""), 
+                serializedNbt.length());
+        }
+        
         if (serializedNbt == null || serializedNbt.isEmpty() || serializedNbt.equals("B64:e30=")) {
             // Check for empty NBT (Base64 encoded '{}')
+            if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+                PlayerSync.LOGGER.info("[DEBUG] Empty or null NBT data, returning ItemStack.EMPTY");
+            }
             return ItemStack.EMPTY;
         }
 
@@ -381,12 +390,24 @@ public class VanillaSync {
         try {
             nbtString = deserializeString(serializedNbt);
             compoundTag = NbtUtils.snbtToStructure(nbtString);
+            
+            if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+                PlayerSync.LOGGER.info("[DEBUG] Successfully parsed NBT structure. Item ID: {}", 
+                    compoundTag.contains("id") ? compoundTag.getString("id") : "NO_ID");
+            }
         } catch (CommandSyntaxException e) {
             PlayerSync.LOGGER.error("Failed to parse NBT structure from serialized data: {}. Creating placeholder item.", serializedNbt, e);
+            if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+                PlayerSync.LOGGER.info("[DEBUG] NBT parse failure details - Error: {}, Data preview: {}", 
+                    e.getMessage(), serializedNbt.substring(0, Math.min(200, serializedNbt.length())));
+            }
             return createPlaceholderItem(serializedNbt, "unknown", 1);
         }
 
         if (compoundTag.isEmpty() || !compoundTag.contains("id", Tag.TAG_STRING)) {
+            if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+                PlayerSync.LOGGER.info("[DEBUG] CompoundTag is empty or missing 'id' field, returning ItemStack.EMPTY");
+            }
             return ItemStack.EMPTY; // Invalid or empty tag
         }
 
@@ -394,11 +415,17 @@ public class VanillaSync {
 
         if (registryName == null) {
             PlayerSync.LOGGER.warn("Failed to parse registry name from NBT: {}", nbtString);
+            if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+                PlayerSync.LOGGER.info("[DEBUG] Registry name parse failure for item ID: {}", compoundTag.getString("id"));
+            }
             return ItemStack.EMPTY; // Cannot determine item type
         }
 
         if (BuiltInRegistries.ITEM.containsKey(registryName)) {
             // Item exists (could be vanilla or a loaded mod item), restore normally
+            if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+                PlayerSync.LOGGER.info("[DEBUG] Item {} found in registry, attempting normal restoration", registryName);
+            }
             try {
                 ItemStack restoredItem = ItemStack.parse(ServerLifecycleHooks.getCurrentServer().registryAccess(),compoundTag).get();
                 // Only return the restored item if the ItemStack.of did not unexpectedly
@@ -407,21 +434,35 @@ public class VanillaSync {
                 // empty or it was an empty inventory slot
                 if (!restoredItem.isEmpty() || compoundTag.isEmpty()
                         || registryName.equals(ResourceLocation.tryParse("air"))) {
+                    if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+                        PlayerSync.LOGGER.info("[DEBUG] Successfully restored item: {} (count: {})", 
+                            registryName, restoredItem.getCount());
+                    }
                     return restoredItem;
                 }
                 // ItemStack.of unexpectedly returned empty for a known, non-air item.
                 PlayerSync.LOGGER.warn(
                         "ItemStack.of returned EMPTY for known item {} with NBT: {}. Creating placeholder as fallback.",
                         registryName, nbtString);
+                if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+                    PlayerSync.LOGGER.info("[DEBUG] Known item {} unexpectedly returned empty - this may be an Apotheosis item with invalid data", registryName);
+                }
             } catch (Exception e) {
                 PlayerSync.LOGGER.error(
                         "Error creating ItemStack for known item {} with NBT: {}. Creating placeholder as fallback.",
                         registryName, nbtString, e);
+                if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+                    PlayerSync.LOGGER.info("[DEBUG] ItemStack creation failed for {} - Exception: {} (This is likely an Apotheosis item)", 
+                        registryName, e.getClass().getSimpleName() + ": " + e.getMessage());
+                }
             }
         }
 
         // Create placeholder
         PlayerSync.LOGGER.debug("Item {} not found in registry. Creating placeholder.", registryName);
+        if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+            PlayerSync.LOGGER.info("[DEBUG] Item {} not found in registry, mod may be missing. Creating placeholder item.", registryName);
+        }
         int placeholderItemAmount = compoundTag.getInt("Count");
         if (placeholderItemAmount <= 0) placeholderItemAmount = 1; // Default to 1 if count is invalid
         return createPlaceholderItem(serializedNbt, registryName.toString(), placeholderItemAmount);

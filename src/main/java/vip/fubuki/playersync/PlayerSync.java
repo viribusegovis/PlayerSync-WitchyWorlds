@@ -57,10 +57,18 @@ public class PlayerSync {
          throw var16;
       }
 
+      // Use configurable column types for player data
+      String inventoryType = (String)JdbcConfig.PLAYER_INVENTORY_TYPE.get();
+      String advancementsType = (String)JdbcConfig.PLAYER_ADVANCEMENTS_TYPE.get();
+      
+      if (JdbcConfig.DEBUG_MODE.get()) {
+         LOGGER.info("Creating player_data table with inventory: {}, advancements: {}", inventoryType, advancementsType);
+      }
+      
       JDBCsetUp.executeUpdate(
          "CREATE TABLE IF NOT EXISTS "
             + dbName
-            + ".`player_data` (`uuid` char(36) NOT NULL,`inventory` longblob,`armor` blob,`advancements` longblob,`enderchest` mediumblob,`effects` blob,`left_hand` blob,`cursors` blob,`xp` int DEFAULT NULL,`food_level` int DEFAULT NULL,`score` int DEFAULT NULL,`health` int DEFAULT NULL,`online` tinyint(1) DEFAULT NULL,`last_server` int DEFAULT NULL,PRIMARY KEY (`uuid`));"
+            + ".`player_data` (`uuid` char(36) NOT NULL,`inventory` " + inventoryType + ",`armor` blob,`advancements` " + advancementsType + ",`enderchest` mediumblob,`effects` blob,`left_hand` blob,`cursors` blob,`xp` int DEFAULT NULL,`food_level` int DEFAULT NULL,`score` int DEFAULT NULL,`health` int DEFAULT NULL,`online` tinyint(1) DEFAULT NULL,`last_server` int DEFAULT NULL,PRIMARY KEY (`uuid`));"
       );
       JDBCsetUp.QueryResult queryResult = JDBCsetUp.executeQuery(
          "SELECT COUNT(*) AS column_count FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '" + dbName + "' AND TABLE_NAME = 'player_data';"
@@ -102,8 +110,16 @@ public class PlayerSync {
       }
 
       if (ModList.get().isLoaded("cobblemon")) {
+         // Use configurable column types for Cobblemon data
+         String pcType = (String)JdbcConfig.COBBLEMON_PC_TYPE.get();
+         String pokedexType = (String)JdbcConfig.COBBLEMON_POKEDEX_TYPE.get();
+         
+         if (JdbcConfig.DEBUG_MODE.get()) {
+            LOGGER.info("Creating Cobblemon table with pc: {}, pokedex: {}", pcType, pokedexType);
+         }
+         
          JDBCsetUp.executeUpdate(
-            "CREATE TABLE IF NOT EXISTS " + dbName + ".cobblemon(uuid CHAR(36) NOT NULL,inv BLOB,pokedex MEDIUMBLOB,pc LONGBLOB,general BLOB,PRIMARY KEY (uuid))"
+            "CREATE TABLE IF NOT EXISTS " + dbName + ".cobblemon(uuid CHAR(36) NOT NULL,inv BLOB,pokedex " + pokedexType + ",pc " + pcType + ",general BLOB,PRIMARY KEY (uuid))"
          );
          
          // Upgrade existing Cobblemon columns for backward compatibility
@@ -119,22 +135,22 @@ public class PlayerSync {
             String columnName = rsCobblemon.getString("COLUMN_NAME");
             String dataType = rsCobblemon.getString("DATA_TYPE");
             
-            if ("pc".equals(columnName) && !"longblob".equalsIgnoreCase(dataType)) {
+            if ("pc".equals(columnName) && !pcType.equalsIgnoreCase(dataType)) {
                needsPcUpgrade = true;
             }
-            if ("pokedex".equals(columnName) && !"mediumblob".equalsIgnoreCase(dataType)) {
+            if ("pokedex".equals(columnName) && !pokedexType.equalsIgnoreCase(dataType)) {
                needsPokedexUpgrade = true;
             }
          }
          
          if (needsPcUpgrade) {
-            LOGGER.info("Upgrading Cobblemon PC column to LONGBLOB for large Pokemon collections.");
-            JDBCsetUp.executeUpdate("ALTER TABLE " + dbName + ".cobblemon MODIFY COLUMN pc LONGBLOB", 1);
+            LOGGER.info("Upgrading Cobblemon PC column to {} for large Pokemon collections.", pcType);
+            JDBCsetUp.executeUpdate("ALTER TABLE " + dbName + ".cobblemon MODIFY COLUMN pc " + pcType, 1);
          }
          
          if (needsPokedexUpgrade) {
-            LOGGER.info("Upgrading Cobblemon Pokedex column to MEDIUMBLOB for complete Pokemon data.");
-            JDBCsetUp.executeUpdate("ALTER TABLE " + dbName + ".cobblemon MODIFY COLUMN pokedex MEDIUMBLOB", 1);
+            LOGGER.info("Upgrading Cobblemon Pokedex column to {} for complete Pokemon data.", pokedexType);
+            JDBCsetUp.executeUpdate("ALTER TABLE " + dbName + ".cobblemon MODIFY COLUMN pokedex " + pokedexType, 1);
          }
          
          rsCobblemon.close();
@@ -142,8 +158,15 @@ public class PlayerSync {
       }
 
       if (ModList.get().isLoaded("sophisticatedbackpacks")) {
+         // Use configurable column type for backpack data
+         String backpackType = (String)JdbcConfig.BACKPACK_NBT_TYPE.get();
+         
+         if (JdbcConfig.DEBUG_MODE.get()) {
+            LOGGER.info("Creating Sophisticated Backpacks table with nbt type: {}", backpackType);
+         }
+         
          JDBCsetUp.executeUpdate(
-            "CREATE TABLE IF NOT EXISTS " + dbName + ".backpack_data (uuid CHAR(36) NOT NULL, backpack_nbt LONGBLOB, PRIMARY KEY (uuid));", 1
+            "CREATE TABLE IF NOT EXISTS " + dbName + ".backpack_data (uuid CHAR(36) NOT NULL, backpack_nbt " + backpackType + ", PRIMARY KEY (uuid));", 1
          );
          
          // Check for existing columns and upgrade both missing uuid and small nbt columns
@@ -162,7 +185,7 @@ public class PlayerSync {
             if ("uuid".equals(columnName)) {
                hasUuid = true;
             }
-            if ("backpack_nbt".equals(columnName) && !"longblob".equalsIgnoreCase(dataType)) {
+            if ("backpack_nbt".equals(columnName) && !backpackType.equalsIgnoreCase(dataType)) {
                needsNbtUpgrade = true;
             }
          }
@@ -174,8 +197,8 @@ public class PlayerSync {
          }
          
          if (needsNbtUpgrade) {
-            LOGGER.info("Upgrading backpack_data nbt column to LONGBLOB for nested backpack storage.");
-            JDBCsetUp.executeUpdate("ALTER TABLE " + dbName + ".backpack_data MODIFY COLUMN backpack_nbt LONGBLOB", 1);
+            LOGGER.info("Upgrading backpack_data nbt column to {} for nested backpack storage.", backpackType);
+            JDBCsetUp.executeUpdate("ALTER TABLE " + dbName + ".backpack_data MODIFY COLUMN backpack_nbt " + backpackType, 1);
          }
 
          rsBackpack.close();
@@ -196,22 +219,22 @@ public class PlayerSync {
          String columnName = rsPlayerData.getString("COLUMN_NAME");
          String dataType = rsPlayerData.getString("DATA_TYPE");
          
-         if ("advancements".equals(columnName) && !"longblob".equalsIgnoreCase(dataType)) {
+         if ("advancements".equals(columnName) && !advancementsType.equalsIgnoreCase(dataType)) {
             needsAdvancementsUpgrade = true;
          }
-         if ("inventory".equals(columnName) && !"longblob".equalsIgnoreCase(dataType)) {
+         if ("inventory".equals(columnName) && !inventoryType.equalsIgnoreCase(dataType)) {
             needsInventoryUpgrade = true;
          }
       }
       
       if (needsAdvancementsUpgrade) {
-         LOGGER.info("Upgrading player_data advancements column to LONGBLOB for extensive modded progression.");
-         JDBCsetUp.executeUpdate("ALTER TABLE " + dbName + ".player_data MODIFY COLUMN advancements LONGBLOB", 1);
+         LOGGER.info("Upgrading player_data advancements column to {} for extensive modded progression.", advancementsType);
+         JDBCsetUp.executeUpdate("ALTER TABLE " + dbName + ".player_data MODIFY COLUMN advancements " + advancementsType, 1);
       }
       
       if (needsInventoryUpgrade) {
-         LOGGER.info("Upgrading player_data inventory column to LONGBLOB for large modded inventories.");
-         JDBCsetUp.executeUpdate("ALTER TABLE " + dbName + ".player_data MODIFY COLUMN inventory LONGBLOB", 1);
+         LOGGER.info("Upgrading player_data inventory column to {} for large modded inventories.", inventoryType);
+         JDBCsetUp.executeUpdate("ALTER TABLE " + dbName + ".player_data MODIFY COLUMN inventory " + inventoryType, 1);
       }
 
       rsPlayerData.close();
