@@ -59,6 +59,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 @EventBusSubscriber(modid = PlayerSync.MODID)
 public class VanillaSync {
@@ -389,6 +390,10 @@ public class VanillaSync {
         CompoundTag compoundTag;
         try {
             nbtString = deserializeString(serializedNbt);
+            
+            // Sanitize NBT string to fix known corruption issues (especially Apotheosis empty key-value pairs)
+            nbtString = sanitizeNbtString(nbtString);
+            
             compoundTag = NbtUtils.snbtToStructure(nbtString);
             
             if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
@@ -424,37 +429,33 @@ public class VanillaSync {
         if (BuiltInRegistries.ITEM.containsKey(registryName)) {
             // Item exists (could be vanilla or a loaded mod item), restore normally
             if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
-                PlayerSync.LOGGER.info("[DEBUG] Item {} found in registry, attempting normal restoration", registryName);
+                PlayerSync.LOGGER.info("[DEBUG] Item {} found in registry, attempting restoration", registryName);
             }
-            try {
-                ItemStack restoredItem = ItemStack.parse(ServerLifecycleHooks.getCurrentServer().registryAccess(),compoundTag).get();
-                // Only return the restored item if the ItemStack.of did not unexpectedly
-                // returned an empty item
-                // Either the item is not empty, or it is empty and the original tag was also
-                // empty or it was an empty inventory slot
-                if (!restoredItem.isEmpty() || compoundTag.isEmpty()
-                        || registryName.equals(ResourceLocation.tryParse("air"))) {
-                    if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
-                        PlayerSync.LOGGER.info("[DEBUG] Successfully restored item: {} (count: {})", 
-                            registryName, restoredItem.getCount());
-                    }
-                    return restoredItem;
-                }
-                // ItemStack.of unexpectedly returned empty for a known, non-air item.
-                PlayerSync.LOGGER.warn(
-                        "ItemStack.of returned EMPTY for known item {} with NBT: {}. Creating placeholder as fallback.",
-                        registryName, nbtString);
+            
+            // Try to create the ItemStack with fallback handling
+            ItemStack restoredItem = createItemStackWithFallback(compoundTag, registryName);
+            
+            // Only return the restored item if it's not unexpectedly empty
+            if (!restoredItem.isEmpty() || compoundTag.isEmpty()
+                    || registryName.equals(ResourceLocation.tryParse("air"))) {
                 if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
-                    PlayerSync.LOGGER.info("[DEBUG] Known item {} unexpectedly returned empty - this may be an Apotheosis item with invalid data", registryName);
+                    PlayerSync.LOGGER.info("[DEBUG] Successfully restored item: {} (count: {})", 
+                        registryName, restoredItem.getCount());
                 }
-            } catch (Exception e) {
-                PlayerSync.LOGGER.error(
-                        "Error creating ItemStack for known item {} with NBT: {}. Creating placeholder as fallback.",
-                        registryName, nbtString, e);
-                if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
-                    PlayerSync.LOGGER.info("[DEBUG] ItemStack creation failed for {} - Exception: {} (This is likely an Apotheosis item)", 
-                        registryName, e.getClass().getSimpleName() + ": " + e.getMessage());
-                }
+                
+                // Log detailed Apotheosis item info
+                logApothosisDebugInfo("ITEM_DESERIALIZATION_SUCCESS", restoredItem, 
+                    "Restored from NBT: " + nbtString.substring(0, Math.min(100, nbtString.length())));
+                
+                return restoredItem;
+            }
+            
+            // ItemStack creation unexpectedly returned empty for a known, non-air item.
+            PlayerSync.LOGGER.warn(
+                    "ItemStack creation returned EMPTY for known item {} with NBT: {}. Creating placeholder as fallback.",
+                    registryName, nbtString);
+            if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+                PlayerSync.LOGGER.info("[DEBUG] Known item {} unexpectedly returned empty - creating placeholder", registryName);
             }
         }
 
@@ -466,6 +467,75 @@ public class VanillaSync {
         int placeholderItemAmount = compoundTag.getInt("Count");
         if (placeholderItemAmount <= 0) placeholderItemAmount = 1; // Default to 1 if count is invalid
         return createPlaceholderItem(serializedNbt, registryName.toString(), placeholderItemAmount);
+    }
+
+    /**
+     * Attempts to create an ItemStack using a more lenient approach when ItemStack.parse fails
+     */
+    private static ItemStack createItemStackWithFallback(CompoundTag compoundTag, ResourceLocation registryName) {
+        try {
+            // First attempt: Try the standard ItemStack.parse method
+            HolderLookup.Provider provider = ServerLifecycleHooks.getCurrentServer().registryAccess();
+            return ItemStack.parse(provider, compoundTag).orElse(ItemStack.EMPTY);
+        } catch (Exception e) {
+            if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+                PlayerSync.LOGGER.info("[DEBUG] ItemStack.parse failed for {}, attempting fallback creation: {}", 
+                    registryName, e.getMessage());
+            }
+            
+            try {
+                // Fallback: Create ItemStack manually and apply custom data
+                ItemStack fallbackStack = new ItemStack(BuiltInRegistries.ITEM.get(registryName));
+                
+                // Set count
+                if (compoundTag.contains("count", Tag.TAG_INT)) {
+                    fallbackStack.setCount(compoundTag.getInt("count"));
+                } else if (compoundTag.contains("Count", Tag.TAG_INT)) {
+                    fallbackStack.setCount(compoundTag.getInt("Count"));
+                }
+                
+                // Handle components (new format)
+                if (compoundTag.contains("components", Tag.TAG_COMPOUND)) {
+                    CompoundTag componentsTag = compoundTag.getCompound("components");
+                    
+                    // Apply custom_data component if present
+                    if (componentsTag.contains("minecraft:custom_data", Tag.TAG_COMPOUND)) {
+                        CompoundTag customData = componentsTag.getCompound("minecraft:custom_data");
+                        CustomData.set(DataComponents.CUSTOM_DATA, fallbackStack, customData);
+                        
+                        if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+                            PlayerSync.LOGGER.info("[DEBUG] Applied custom_data component to fallback {}: {}", 
+                                registryName, customData.toString());
+                        }
+                    }
+                    
+                    // Apply other common components that Apotheosis might use
+                    if (componentsTag.contains("minecraft:lore")) {
+                        // Handle lore component - this is complex so we'll skip for now
+                        if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+                            PlayerSync.LOGGER.info("[DEBUG] Skipping lore component for fallback {}", registryName);
+                        }
+                    }
+                }
+                
+                // Handle legacy tag format (for backward compatibility)
+                if (compoundTag.contains("tag", Tag.TAG_COMPOUND)) {
+                    CompoundTag legacyTag = compoundTag.getCompound("tag");
+                    CustomData.set(DataComponents.CUSTOM_DATA, fallbackStack, legacyTag);
+                    
+                    if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+                        PlayerSync.LOGGER.info("[DEBUG] Applied legacy tag to fallback {}: {}", 
+                            registryName, legacyTag.toString());
+                    }
+                }
+                
+                return fallbackStack;
+            } catch (Exception fallbackException) {
+                PlayerSync.LOGGER.error("Fallback ItemStack creation also failed for {}: {}", 
+                    registryName, fallbackException.getMessage());
+                return ItemStack.EMPTY;
+            }
+        }
     }
 
     /**
@@ -510,6 +580,93 @@ public class VanillaSync {
 
         placeholder.set(DataComponents.LORE, new ItemLore(loreList));
         return placeholder;
+    }
+
+    /**
+     * Logs comprehensive debugging information for Apotheosis items
+     */
+    private static void logApothosisDebugInfo(String operation, ItemStack itemStack, String additionalInfo) {
+        if (!vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+            return;
+        }
+        
+        String itemId = itemStack.getItem().toString();
+        boolean isApothItem = itemId.contains("apotheosis") || 
+                            (itemStack.has(DataComponents.CUSTOM_DATA) && 
+                             itemStack.get(DataComponents.CUSTOM_DATA).copyTag().toString().contains("apotheosis"));
+        
+        if (isApothItem) {
+            PlayerSync.LOGGER.info("=== APOTHEOSIS DEBUG: {} ===", operation);
+            PlayerSync.LOGGER.info("Item ID: {}", itemId);
+            PlayerSync.LOGGER.info("Item Count: {}", itemStack.getCount());
+            PlayerSync.LOGGER.info("Has Custom Data: {}", itemStack.has(DataComponents.CUSTOM_DATA));
+            
+            if (itemStack.has(DataComponents.CUSTOM_DATA)) {
+                CompoundTag customData = itemStack.get(DataComponents.CUSTOM_DATA).copyTag();
+                PlayerSync.LOGGER.info("Custom Data: {}", customData.toString());
+                
+                // Check for specific Apotheosis keys
+                if (customData.contains("apotheosis:rarity")) {
+                    PlayerSync.LOGGER.info("Apotheosis Rarity: {}", customData.getString("apotheosis:rarity"));
+                }
+                if (customData.contains("apotheosis:affix_data")) {
+                    PlayerSync.LOGGER.info("Apotheosis Affix Data: {}", customData.getCompound("apotheosis:affix_data"));
+                }
+                // Check for legacy format
+                if (customData.contains("affix_data")) {
+                    PlayerSync.LOGGER.info("Legacy Affix Data: {}", customData.getCompound("affix_data"));
+                }
+            }
+            
+            if (additionalInfo != null && !additionalInfo.isEmpty()) {
+                PlayerSync.LOGGER.info("Additional Info: {}", additionalInfo);
+            }
+            PlayerSync.LOGGER.info("=== END APOTHEOSIS DEBUG ===");
+        }
+    }
+
+    /**
+     * Sanitizes NBT strings to fix known corruption issues while maintaining backwards compatibility.
+     * Specifically targets:
+     * - Apotheosis empty key-value pairs like {"":""}
+     * - Other malformed JSON/NBT structures that cause parsing failures
+     *
+     * @param nbtString The NBT string to sanitize
+     * @return The sanitized NBT string
+     */
+    private static String sanitizeNbtString(String nbtString) {
+        if (nbtString == null || nbtString.isEmpty()) {
+            return nbtString;
+        }
+
+        String sanitized = nbtString;
+        boolean wasModified = false;
+
+        // Fix Apotheosis empty key-value pairs: {"":""}
+        // These appear in the 'with' array of apotheosis:affix_name components
+        String emptyKvPattern = "\\{\"\":\"\"\\}";
+        if (sanitized.matches(".*" + emptyKvPattern + ".*")) {
+            // Remove empty key-value pairs from arrays, handling various spacing scenarios
+            sanitized = sanitized.replaceAll(",\\s*" + emptyKvPattern, ""); // Remove if it's not the first element
+            sanitized = sanitized.replaceAll(emptyKvPattern + "\\s*,", ""); // Remove if it's the first element
+            sanitized = sanitized.replaceAll(emptyKvPattern, ""); // Remove if it's the only element
+            wasModified = true;
+        }
+
+        // Fix orphaned commas that might result from the above cleanup
+        sanitized = sanitized.replaceAll(",\\s*,", ","); // Double commas
+        sanitized = sanitized.replaceAll("\\[\\s*,", "["); // Leading comma in arrays
+        sanitized = sanitized.replaceAll(",\\s*\\]", "]"); // Trailing comma in arrays
+        sanitized = sanitized.replaceAll("\\{\\s*,", "{"); // Leading comma in objects
+        sanitized = sanitized.replaceAll(",\\s*\\}", "}"); // Trailing comma in objects
+
+        if (wasModified && vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+            PlayerSync.LOGGER.info("[DEBUG] Sanitized corrupted NBT - Original length: {}, Sanitized length: {}", 
+                nbtString.length(), sanitized.length());
+            PlayerSync.LOGGER.info("[DEBUG] Fixed empty key-value pairs in NBT structure");
+        }
+
+        return sanitized;
     }
 
     /**
@@ -619,10 +776,41 @@ public class VanillaSync {
         if (itemStack.is(Items.PAPER) && itemStack.getComponents().has(DataComponents.CUSTOM_DATA)
                 && itemStack.getComponents().get(DataComponents.CUSTOM_DATA).contains("playersync:original_item_nbt")) {
             // It's our placeholder, retrieve the original NBT string
-            return itemStack.getComponents().get(DataComponents.CUSTOM_DATA).copyTag().getString("playersync:original_item_nbt");
+            String originalNbt = itemStack.getComponents().get(DataComponents.CUSTOM_DATA).copyTag().getString("playersync:original_item_nbt");
+            if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+                PlayerSync.LOGGER.info("[DEBUG] Storing placeholder item with original NBT (length: {})", originalNbt.length());
+            }
+            return originalNbt;
         } else {
             // It's a normal item or empty, serialize its current NBT
-            return serialize(serializeNBT(itemStack).toString());
+            try {
+                String serializedNbt = serialize(serializeNBT(itemStack).toString());
+                
+                // Enhanced debugging for Apotheosis items
+                if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+                    String itemId = itemStack.getItem().toString();
+                    boolean isApothItem = itemId.contains("apotheosis") || 
+                                        (itemStack.has(DataComponents.CUSTOM_DATA) && 
+                                         itemStack.get(DataComponents.CUSTOM_DATA).copyTag().toString().contains("apotheosis"));
+                    if (isApothItem) {
+                        PlayerSync.LOGGER.info("[DEBUG] Storing Apotheosis item: {} -> serialized length: {}", 
+                            itemId, serializedNbt.length());
+                        
+                        // Log custom data component details if present
+                        if (itemStack.has(DataComponents.CUSTOM_DATA)) {
+                            CompoundTag customData = itemStack.get(DataComponents.CUSTOM_DATA).copyTag();
+                            PlayerSync.LOGGER.info("[DEBUG] Custom data component: {}", customData.toString());
+                        }
+                    }
+                }
+                
+                return serializedNbt;
+            } catch (Exception e) {
+                PlayerSync.LOGGER.error("Failed to serialize ItemStack for storage: {} - Error: {}", 
+                    itemStack.getItem().toString(), e.getMessage(), e);
+                // Return a basic serialized empty tag to prevent database corruption
+                return serialize("{}");
+            }
         }
     }
 
@@ -630,11 +818,33 @@ public class VanillaSync {
         if (itemStack == null || itemStack.isEmpty()) {
             return new CompoundTag();
         }
-        // Serialize the ItemStack to NBT
-        HolderLookup.Provider provider = ServerLifecycleHooks.getCurrentServer().registryAccess();
-        Tag compoundTag;
-        compoundTag = itemStack.save(provider);
-        return compoundTag;
+        
+        try {
+            // Serialize the ItemStack to NBT using Data Components API
+            HolderLookup.Provider provider = ServerLifecycleHooks.getCurrentServer().registryAccess();
+            Tag compoundTag = itemStack.save(provider);
+            
+            if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+                String itemId = itemStack.getItem().toString();
+                boolean isApothItem = itemId.contains("apotheosis") || 
+                                    (itemStack.has(DataComponents.CUSTOM_DATA) && 
+                                     itemStack.get(DataComponents.CUSTOM_DATA).copyTag().toString().contains("apotheosis"));
+                if (isApothItem) {
+                    PlayerSync.LOGGER.info("[DEBUG] Serializing Apotheosis item: {} -> NBT: {}", 
+                        itemId, compoundTag.toString());
+                }
+            }
+            
+            return compoundTag;
+        } catch (Exception e) {
+            PlayerSync.LOGGER.error("Failed to serialize ItemStack: {} - Error: {}", 
+                itemStack.getItem().toString(), e.getMessage(), e);
+            // Return basic NBT with just the item ID to prevent complete data loss
+            CompoundTag fallbackTag = new CompoundTag();
+            fallbackTag.putString("id", BuiltInRegistries.ITEM.getKey(itemStack.getItem()).toString());
+            fallbackTag.putInt("count", itemStack.getCount());
+            return fallbackTag;
+        }
     }
 
     public static void store(Player player, boolean init) throws SQLException, IOException {
@@ -872,6 +1082,20 @@ public class VanillaSync {
     public static void onPlayerDeath(LivingDeathEvent event) {
         if (event.getEntity() instanceof ServerPlayer player && !deadPlayerWhileLogging.contains(event.getEntity().getUUID().toString())) {
             CuriosCache.tryStoreCuriosToCache(player);
+        }
+    }
+
+    public static void shutdown() {
+        if (executorService != null && !executorService.isShutdown()) {
+            executorService.shutdown();
+            try {
+                if (!executorService.awaitTermination(10, TimeUnit.SECONDS)) {
+                    executorService.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                executorService.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
         }
     }
 }

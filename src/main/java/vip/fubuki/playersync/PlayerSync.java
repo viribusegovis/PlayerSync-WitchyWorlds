@@ -252,5 +252,6 @@ public class PlayerSync {
    @SubscribeEvent
    public void onServerStopping(ServerStoppingEvent event) {
       ChatSync.shutdown();
+      VanillaSync.shutdown();
    }
 }
