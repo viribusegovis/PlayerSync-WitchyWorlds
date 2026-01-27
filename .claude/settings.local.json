@@ -19,7 +19,8 @@
       "Bash(rm:*)",
       "Bash(git remote add:*)",
       "Bash(git branch:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(.gradlew.bat compileJava)"
     ],
     "deny": []
   }

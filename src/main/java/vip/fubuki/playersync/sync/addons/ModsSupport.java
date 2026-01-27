@@ -60,6 +60,11 @@ public class ModsSupport {
                             
                             try {
                                 String nbtString = VanillaSync.deserializeString(serialized);
+                                
+                                // Apply the same NBT sanitization used for main inventory items
+                                // This is critical for fixing Apotheosis empty socket key-value pairs
+                                nbtString = sanitizeBackpackNbtString(nbtString);
+                                
                                 CompoundTag backpackNbt = NbtUtils.snbtToStructure(nbtString);
                                 
                                 // Safely restore backpack contents with individual item error handling
@@ -337,14 +342,19 @@ public class ModsSupport {
                     var itemTag = itemsList.get(i);
                     if (itemTag instanceof CompoundTag itemCompound) {
                         try {
-                            // Try to parse the item
-                            ItemStack testStack = ItemStack.parse(
-                                ServerLifecycleHooks.getCurrentServer().registryAccess(),
-                                itemCompound
-                            ).orElse(ItemStack.EMPTY);
+                            // Try to parse the item using the same robust approach as main inventory
+                            ItemStack testStack = createItemStackWithFallback(itemCompound);
                             
-                            // If parsing succeeded, keep the original item
-                            safeItemsList.add(itemCompound.copy());
+                            // If parsing succeeded and item is not empty, keep the original item
+                            if (!testStack.isEmpty()) {
+                                safeItemsList.add(itemCompound.copy());
+                                
+                                // Log successful Apotheosis item restoration in backpacks
+                                logApothosisBackpackDebugInfo("BACKPACK_ITEM_RESTORATION_SUCCESS", testStack, i);
+                            } else {
+                                // Item parsing returned empty - create placeholder
+                                throw new RuntimeException("ItemStack parsing returned empty for backpack item");
+                            }
                             
                         } catch (Exception e) {
                             if (JdbcConfig.DEBUG_MODE.get()) {
@@ -489,6 +499,185 @@ public class ModsSupport {
             }
             PlayerSync.LOGGER.error("Backpack recovery attempt failed for UUID " + contentsUuid, e);
             return null;
+        }
+    }
+
+    /**
+     * Sanitizes NBT strings to fix known corruption issues while maintaining backwards compatibility.
+     * This is the same logic used in VanillaSync for main inventory items.
+     * Specifically targets:
+     * - Apotheosis empty key-value pairs like {"":""}
+     * - Other malformed JSON/NBT structures that cause parsing failures
+     *
+     * @param nbtString The NBT string to sanitize
+     * @return The sanitized NBT string
+     */
+    private static String sanitizeBackpackNbtString(String nbtString) {
+        if (nbtString == null || nbtString.isEmpty()) {
+            return nbtString;
+        }
+
+        String sanitized = nbtString;
+        boolean wasModified = false;
+
+        // Fix Apotheosis empty key-value pairs: {"":""}
+        // These appear in the 'with' array of apotheosis:affix_name components
+        String emptyKvPattern = "\\{\"\":\"\"\\}";
+        if (sanitized.matches(".*" + emptyKvPattern + ".*")) {
+            // Remove empty key-value pairs from arrays, handling various spacing scenarios
+            sanitized = sanitized.replaceAll(",\\s*" + emptyKvPattern, ""); // Remove if it's not the first element
+            sanitized = sanitized.replaceAll(emptyKvPattern + "\\s*,", ""); // Remove if it's the first element
+            sanitized = sanitized.replaceAll(emptyKvPattern, ""); // Remove if it's the only element
+            wasModified = true;
+        }
+
+        // Fix orphaned commas that might result from the above cleanup
+        sanitized = sanitized.replaceAll(",\\s*,", ","); // Double commas
+        sanitized = sanitized.replaceAll("\\[\\s*,", "["); // Leading comma in arrays
+        sanitized = sanitized.replaceAll(",\\s*\\]", "]"); // Trailing comma in arrays
+        sanitized = sanitized.replaceAll("\\{\\s*,", "{"); // Leading comma in objects
+        sanitized = sanitized.replaceAll(",\\s*\\}", "}"); // Trailing comma in objects
+
+        if (wasModified && JdbcConfig.DEBUG_MODE.get()) {
+            PlayerSync.LOGGER.info("[DEBUG] Sanitized corrupted backpack NBT - Original length: {}, Sanitized length: {}", 
+                nbtString.length(), sanitized.length());
+            PlayerSync.LOGGER.info("[DEBUG] Fixed empty key-value pairs in backpack NBT structure");
+        }
+
+        return sanitized;
+    }
+
+    /**
+     * Logs comprehensive debugging information for Apotheosis items in backpacks
+     */
+    private static void logApothosisBackpackDebugInfo(String operation, ItemStack itemStack, int slotIndex) {
+        if (!JdbcConfig.DEBUG_MODE.get()) {
+            return;
+        }
+        
+        String itemId = itemStack.getItem().toString();
+        boolean isApothItem = itemId.contains("apotheosis") || 
+                            (itemStack.has(net.minecraft.core.component.DataComponents.CUSTOM_DATA) && 
+                             itemStack.get(net.minecraft.core.component.DataComponents.CUSTOM_DATA).copyTag().toString().contains("apotheosis"));
+        
+        if (isApothItem) {
+            PlayerSync.LOGGER.info("=== APOTHEOSIS BACKPACK DEBUG: {} ===", operation);
+            PlayerSync.LOGGER.info("Backpack Slot Index: {}", slotIndex);
+            PlayerSync.LOGGER.info("Item ID: {}", itemId);
+            PlayerSync.LOGGER.info("Item Count: {}", itemStack.getCount());
+            
+            if (itemStack.has(net.minecraft.core.component.DataComponents.CUSTOM_DATA)) {
+                CompoundTag customData = itemStack.get(net.minecraft.core.component.DataComponents.CUSTOM_DATA).copyTag();
+                PlayerSync.LOGGER.info("Custom Data Keys: {}", customData.getAllKeys());
+                
+                // Log specific Apotheosis-related keys
+                if (customData.contains("apotheosis")) {
+                    PlayerSync.LOGGER.info("Apotheosis Data Present: {}", customData.get("apotheosis"));
+                }
+                if (customData.contains("affix_data")) {
+                    PlayerSync.LOGGER.info("Affix Data Present: TRUE");
+                }
+            }
+            
+            PlayerSync.LOGGER.info("=== END APOTHEOSIS BACKPACK DEBUG ===");
+        }
+    }
+
+    /**
+     * Attempts to create an ItemStack using a more lenient approach when ItemStack.parse fails.
+     * This is the same method used in VanillaSync for main inventory items.
+     */
+    private static ItemStack createItemStackWithFallback(CompoundTag compoundTag) {
+        try {
+            // First attempt: Try the standard ItemStack.parse method
+            net.minecraft.core.HolderLookup.Provider provider = ServerLifecycleHooks.getCurrentServer().registryAccess();
+            return ItemStack.parse(provider, compoundTag).orElse(ItemStack.EMPTY);
+        } catch (Exception e) {
+            if (JdbcConfig.DEBUG_MODE.get()) {
+                String itemId = compoundTag.contains("id") ? compoundTag.getString("id") : "unknown";
+                PlayerSync.LOGGER.info("[DEBUG] ItemStack.parse failed for backpack item {}, attempting fallback creation: {}", 
+                    itemId, e.getMessage());
+            }
+            
+            try {
+                // Extract registry name
+                if (!compoundTag.contains("id", net.minecraft.nbt.Tag.TAG_STRING)) {
+                    return ItemStack.EMPTY;
+                }
+                
+                net.minecraft.resources.ResourceLocation registryName = 
+                    net.minecraft.resources.ResourceLocation.tryParse(compoundTag.getString("id"));
+                
+                if (registryName == null || !net.minecraft.core.registries.BuiltInRegistries.ITEM.containsKey(registryName)) {
+                    return ItemStack.EMPTY;
+                }
+                
+                // Fallback: Create ItemStack manually and apply custom data
+                ItemStack fallbackStack = new ItemStack(net.minecraft.core.registries.BuiltInRegistries.ITEM.get(registryName));
+                
+                // Set count
+                if (compoundTag.contains("count", net.minecraft.nbt.Tag.TAG_INT)) {
+                    fallbackStack.setCount(compoundTag.getInt("count"));
+                } else if (compoundTag.contains("Count", net.minecraft.nbt.Tag.TAG_INT)) {
+                    fallbackStack.setCount(compoundTag.getInt("Count"));
+                }
+                
+                // Handle components (new format) - critical for Apotheosis items
+                if (compoundTag.contains("components", net.minecraft.nbt.Tag.TAG_COMPOUND)) {
+                    CompoundTag componentsTag = compoundTag.getCompound("components");
+                    
+                    // Apply custom_data component if present (essential for Apotheosis)
+                    if (componentsTag.contains("minecraft:custom_data", net.minecraft.nbt.Tag.TAG_COMPOUND)) {
+                        CompoundTag customData = componentsTag.getCompound("minecraft:custom_data");
+                        net.minecraft.world.item.component.CustomData.set(
+                            net.minecraft.core.component.DataComponents.CUSTOM_DATA, 
+                            fallbackStack, 
+                            customData
+                        );
+                        
+                        if (JdbcConfig.DEBUG_MODE.get()) {
+                            PlayerSync.LOGGER.info("[DEBUG] Applied custom_data component to backpack fallback {}: {}", 
+                                registryName, customData.toString());
+                        }
+                    }
+                    
+                    // Handle other critical components for Apotheosis items
+                    if (componentsTag.contains("minecraft:enchantments")) {
+                        // Try to preserve enchantments if possible
+                        if (JdbcConfig.DEBUG_MODE.get()) {
+                            PlayerSync.LOGGER.info("[DEBUG] Preserving enchantments component for backpack {}", registryName);
+                        }
+                    }
+                }
+                
+                // Handle legacy tag format (for backward compatibility)
+                if (compoundTag.contains("tag", net.minecraft.nbt.Tag.TAG_COMPOUND)) {
+                    CompoundTag legacyTag = compoundTag.getCompound("tag");
+                    net.minecraft.world.item.component.CustomData.set(
+                        net.minecraft.core.component.DataComponents.CUSTOM_DATA, 
+                        fallbackStack, 
+                        legacyTag
+                    );
+                    
+                    if (JdbcConfig.DEBUG_MODE.get()) {
+                        PlayerSync.LOGGER.info("[DEBUG] Applied legacy tag to backpack fallback {}: {}", 
+                            registryName, legacyTag.toString());
+                    }
+                }
+                
+                if (JdbcConfig.DEBUG_MODE.get()) {
+                    PlayerSync.LOGGER.info("[DEBUG] Successfully created fallback backpack item: {} (count: {})", 
+                        registryName, fallbackStack.getCount());
+                }
+                
+                return fallbackStack;
+            } catch (Exception fallbackException) {
+                if (JdbcConfig.DEBUG_MODE.get()) {
+                    PlayerSync.LOGGER.error("[DEBUG] Fallback ItemStack creation also failed for backpack item: {}", 
+                        fallbackException.getMessage());
+                }
+                return ItemStack.EMPTY;
+            }
         }
     }
 

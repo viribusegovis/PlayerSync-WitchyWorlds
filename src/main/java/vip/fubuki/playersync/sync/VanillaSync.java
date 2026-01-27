@@ -67,6 +67,7 @@ public class VanillaSync {
     public static void register() {}
 
     static ExecutorService executorService = Executors.newCachedThreadPool(new PSThreadPoolFactory("PlayerSync"));
+    private static volatile boolean isShuttingDown = false;
 
     @SubscribeEvent
     public static void onDataPackSyncEvent(OnDatapackSyncEvent event) throws SQLException, IOException {
@@ -725,18 +726,79 @@ public class VanillaSync {
 
     @SubscribeEvent
     public static void onPlayerSaveToFile(PlayerEvent.SaveToFile event) {
-        executorService.submit(() -> {
+        // Check if we're shutting down or if executor is shutdown
+        if (isShuttingDown || executorService.isShutdown()) {
+            PlayerSync.LOGGER.warn("Skipping player save task for {} - server is shutting down", 
+                event.getEntity().getName().getString());
+            return;
+        }
+        
+        try {
+            executorService.submit(() -> {
+                try {
+                    doPlayerSaveToFile(event);
+                } catch (Exception e) {
+                    PlayerSync.LOGGER.error("Error in player save task: {}", e.getMessage());
+                    if (JdbcConfig.DEBUG_MODE.get()) {
+                        e.printStackTrace();
+                    }
+                }
+            });
+        } catch (Exception e) {
+            // Handle RejectedExecutionException and other potential exceptions
+            PlayerSync.LOGGER.warn("Failed to submit player save task for {} - executor may be shutdown: {}", 
+                event.getEntity().getName().getString(), e.getMessage());
+            
+            // Try to save synchronously as fallback
             try {
+                PlayerSync.LOGGER.info("Attempting synchronous save for {} as fallback", 
+                    event.getEntity().getName().getString());
                 doPlayerSaveToFile(event);
-            } catch (Exception e) {
-                e.printStackTrace();
+            } catch (Exception fallbackException) {
+                PlayerSync.LOGGER.error("Synchronous save fallback failed for {}: {}", 
+                    event.getEntity().getName().getString(), fallbackException.getMessage());
             }
-        });
+        }
     }
 
     @SubscribeEvent
     public static void onServerShutdown(ServerStoppedEvent event) throws SQLException {
+        PlayerSync.LOGGER.info("Server shutting down, initiating graceful PlayerSync shutdown...");
+        
+        // Mark as shutting down to prevent new task submissions
+        isShuttingDown = true;
+        
+        // Update server status in database
         JDBCsetUp.executeUpdate("UPDATE server_info SET enable= '0' WHERE id=" + JdbcConfig.SERVER_ID.get());
+        
+        // Shutdown executor service gracefully
+        if (executorService != null && !executorService.isShutdown()) {
+            PlayerSync.LOGGER.info("Shutting down PlayerSync thread pool...");
+            executorService.shutdown(); // Disable new tasks from being submitted
+            
+            try {
+                // Wait a while for existing tasks to terminate
+                if (!executorService.awaitTermination(30, TimeUnit.SECONDS)) {
+                    PlayerSync.LOGGER.warn("Thread pool did not terminate gracefully within 30 seconds, forcing shutdown...");
+                    executorService.shutdownNow(); // Cancel currently executing tasks
+                    
+                    // Wait a bit more for tasks to respond to being cancelled
+                    if (!executorService.awaitTermination(10, TimeUnit.SECONDS)) {
+                        PlayerSync.LOGGER.error("Thread pool did not terminate after forced shutdown");
+                    } else {
+                        PlayerSync.LOGGER.info("Thread pool terminated successfully after forced shutdown");
+                    }
+                } else {
+                    PlayerSync.LOGGER.info("PlayerSync thread pool shutdown completed gracefully");
+                }
+            } catch (InterruptedException ie) {
+                PlayerSync.LOGGER.warn("Thread pool shutdown interrupted, forcing immediate shutdown...");
+                executorService.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+        }
+        
+        PlayerSync.LOGGER.info("PlayerSync shutdown complete");
     }
 
     public static void doPlayerLogout(PlayerEvent.PlayerLoggedOutEvent event) throws SQLException, IOException {
@@ -760,13 +822,53 @@ public class VanillaSync {
             // Mod support
             ModsSupport modsSupport = new ModsSupport();
             modsSupport.onPlayerLeave(event.getEntity());
-            executorService.submit(() -> {
+            
+            // Check if we're shutting down or if executor is shutdown
+            if (isShuttingDown || executorService.isShutdown()) {
+                PlayerSync.LOGGER.warn("Skipping player logout task for {} - server is shutting down, executing synchronously", 
+                    event.getEntity().getName().getString());
+                
+                // Execute synchronously during shutdown to ensure player data is saved
                 try {
                     doPlayerLogout(event);
+                    PlayerSync.LOGGER.info("Successfully saved player data synchronously for {} during shutdown", 
+                        event.getEntity().getName().getString());
                 } catch (Exception e) {
-                    e.printStackTrace();
+                    PlayerSync.LOGGER.error("Failed to save player data synchronously for {} during shutdown: {}", 
+                        event.getEntity().getName().getString(), e.getMessage());
+                    if (JdbcConfig.DEBUG_MODE.get()) {
+                        e.printStackTrace();
+                    }
                 }
-            });
+                return;
+            }
+            
+            try {
+                executorService.submit(() -> {
+                    try {
+                        doPlayerLogout(event);
+                    } catch (Exception e) {
+                        PlayerSync.LOGGER.error("Error in player logout task: {}", e.getMessage());
+                        if (JdbcConfig.DEBUG_MODE.get()) {
+                            e.printStackTrace();
+                        }
+                    }
+                });
+            } catch (Exception e) {
+                // Handle RejectedExecutionException and other potential exceptions
+                PlayerSync.LOGGER.warn("Failed to submit player logout task for {} - executor may be shutdown: {}", 
+                    event.getEntity().getName().getString(), e.getMessage());
+                
+                // Try to save synchronously as fallback
+                try {
+                    PlayerSync.LOGGER.info("Attempting synchronous logout save for {} as fallback", 
+                        event.getEntity().getName().getString());
+                    doPlayerLogout(event);
+                } catch (Exception fallbackException) {
+                    PlayerSync.LOGGER.error("Synchronous logout save fallback failed for {}: {}", 
+                        event.getEntity().getName().getString(), fallbackException.getMessage());
+                }
+            }
         }
     }
 
