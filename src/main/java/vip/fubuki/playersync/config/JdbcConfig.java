@@ -38,6 +38,8 @@ public class JdbcConfig {
    
    // Debug Configuration
    public static BooleanValue DEBUG_MODE;
+   public static BooleanValue DEBUG_CONNECTION_POOL;
+   public static BooleanValue DEBUG_ACHIEVEMENTS;
    
    // Connection Pool Configuration
    public static IntValue CONNECTION_POOL_MAX_SIZE;
@@ -130,10 +132,24 @@ public class JdbcConfig {
       DEBUG_MODE = COMMON_BUILDER.comment(
             new String[]{
                "Enable debug mode for verbose logging",
-               "Shows detailed database operations, connection pool stats, and data processing",
+               "Shows detailed database operations, backpack processing, and data processing",
                "WARNING: May generate large log files - use only for troubleshooting"
             }
          ).define("debug_mode", false);
+      DEBUG_CONNECTION_POOL = COMMON_BUILDER.comment(
+            new String[]{
+               "Enable debug logging for database connection pool operations",
+               "Shows connection requests, pool status, and connection lifecycle",
+               "Can be disabled separately from main debug mode to reduce log spam"
+            }
+         ).define("debug_connection_pool", false);
+      DEBUG_ACHIEVEMENTS = COMMON_BUILDER.comment(
+            new String[]{
+               "Enable debug logging for advancement/achievement synchronization",
+               "Shows detailed advancement processing and JSON parsing operations",
+               "Disabled by default to reduce log spam from advancement data"
+            }
+         ).define("debug_achievements", false);
       COMMON_BUILDER.pop();
 
       // Connection Pool Configuration

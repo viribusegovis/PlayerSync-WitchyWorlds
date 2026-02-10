@@ -99,7 +99,9 @@ public class VanillaSync {
 
         final MinecraftServer server = ServerLifecycleHooks.getCurrentServer();
         if (server.isDedicatedServer()) {
-            PlayerSync.LOGGER.debug("Attempting to write dedicated server advancement file");
+            if (JdbcConfig.DEBUG_ACHIEVEMENTS.get()) {
+                PlayerSync.LOGGER.info("[ADVANCE] Writing dedicated server advancement file");
+            }
             File advancements = new File(gameDir,
                     "/advancements" + "/" + player_uuid + ".json");
             byte[] bytes = advancementsResultSet.getString("advancements").getBytes();
@@ -107,7 +109,9 @@ public class VanillaSync {
 
             // only create advancements file if at least "{}" has been stored in the field
             if (bytes.length < 2) {
-                PlayerSync.LOGGER.debug("Skip writing advancements for player " + player_uuid);
+                if (JdbcConfig.DEBUG_ACHIEVEMENTS.get()) {
+                PlayerSync.LOGGER.info("[ADVANCE] Skip writing advancements for player " + player_uuid);
+            }
                 return;
             }
 
@@ -124,7 +128,9 @@ public class VanillaSync {
 
             if (!advancements.exists()) {
                 try {
-                    PlayerSync.LOGGER.info("Creating new advancement file for player " + player_uuid);
+                    if (JdbcConfig.DEBUG_ACHIEVEMENTS.get()) {
+                        PlayerSync.LOGGER.info("[ADVANCE] Creating new advancement file for player " + player_uuid);
+                    }
                     advancements.createNewFile();
                 } catch (IOException e) {
                     PlayerSync.LOGGER.error("Aborting advancements sync. Failed to create advancements file at "
@@ -132,9 +138,10 @@ public class VanillaSync {
                     return;
                 }
             }
-            PlayerSync.LOGGER.debug("Writing advancement file " + advancements.toPath() + " for player " + player_uuid);
-            PlayerSync.LOGGER.trace("Writing advancement file for player " + player_uuid + ": "
-                    + new String(bytes, StandardCharsets.UTF_8));
+            if (JdbcConfig.DEBUG_ACHIEVEMENTS.get()) {
+                PlayerSync.LOGGER.info("[ADVANCE] Writing advancement file {} for player {}", advancements.toPath(), player_uuid);
+                PlayerSync.LOGGER.info("[ADVANCE] Data: {}", new String(bytes, StandardCharsets.UTF_8));
+            }
             Files.write(advancements.toPath(), bytes);
 
             // reload the json files on the server after updating them
@@ -142,7 +149,9 @@ public class VanillaSync {
             playeradvancements.reload(server.getAdvancements());
 
         } else {
-            PlayerSync.LOGGER.debug("Writing non-dedicated server advancement files");
+            if (JdbcConfig.DEBUG_ACHIEVEMENTS.get()) {
+                PlayerSync.LOGGER.info("[ADVANCE] Writing non-dedicated server advancement files");
+            }
             File[] files = scanAdvancementsFile(player_uuid, gameDir);
             for (File file : files) {
                 if (file == null)
@@ -372,17 +381,15 @@ public class VanillaSync {
     }
 
     // deserialize item and potentially create placeholders
-    private static ItemStack deserializeAndCreatePlaceholderIfNeeded(String serializedNbt) {
+    public static ItemStack deserializeAndCreatePlaceholderIfNeeded(String serializedNbt) {
         if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
-            PlayerSync.LOGGER.info("[DEBUG] Deserializing item: {} (length: {})", 
-                serializedNbt.substring(0, Math.min(100, serializedNbt.length())) + (serializedNbt.length() > 100 ? "..." : ""), 
-                serializedNbt.length());
+            PlayerSync.LOGGER.info("[ITEM] DESER len={} data={}", serializedNbt.length(), serializedNbt.substring(0, Math.min(100, serializedNbt.length())) + (serializedNbt.length() > 100 ? "..." : ""));
         }
         
         if (serializedNbt == null || serializedNbt.isEmpty() || serializedNbt.equals("B64:e30=")) {
             // Check for empty NBT (Base64 encoded '{}')
             if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
-                PlayerSync.LOGGER.info("[DEBUG] Empty or null NBT data, returning ItemStack.EMPTY");
+                PlayerSync.LOGGER.info("[ITEM] EMPTY nbt, return ItemStack.EMPTY");
             }
             return ItemStack.EMPTY;
         }
@@ -398,14 +405,12 @@ public class VanillaSync {
             compoundTag = NbtUtils.snbtToStructure(nbtString);
             
             if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
-                PlayerSync.LOGGER.info("[DEBUG] Successfully parsed NBT structure. Item ID: {}", 
-                    compoundTag.contains("id") ? compoundTag.getString("id") : "NO_ID");
+                PlayerSync.LOGGER.info("[ITEM] NBT parsed OK, id={}", compoundTag.contains("id") ? compoundTag.getString("id") : "NO_ID");
             }
         } catch (CommandSyntaxException e) {
             PlayerSync.LOGGER.error("Failed to parse NBT structure from serialized data: {}. Creating placeholder item.", serializedNbt, e);
             if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
-                PlayerSync.LOGGER.info("[DEBUG] NBT parse failure details - Error: {}, Data preview: {}", 
-                    e.getMessage(), serializedNbt.substring(0, Math.min(200, serializedNbt.length())));
+                PlayerSync.LOGGER.info("[ITEM] NBT parse FAIL - Error: {} Data: {}", e.getMessage(), serializedNbt.substring(0, Math.min(200, serializedNbt.length())));
             }
             return createPlaceholderItem(serializedNbt, "unknown", 1);
         }
@@ -652,6 +657,21 @@ public class VanillaSync {
             sanitized = sanitized.replaceAll(emptyKvPattern + "\\s*,", ""); // Remove if it's the first element
             sanitized = sanitized.replaceAll(emptyKvPattern, ""); // Remove if it's the only element
             wasModified = true;
+        }
+
+        // Fix Draconic Evolution config_properties corruption: {"": "DECIMAL"} -> {"type": "DECIMAL"}
+        // These appear as the first element in draconicevolution:config_properties arrays
+        if (sanitized.contains("draconicevolution:config_properties")) {
+            String draconicPattern = "\\{\"\":\\s*\"(DECIMAL|INTEGER|STRING)\"\\s*\\}";
+            if (sanitized.matches(".*" + draconicPattern + ".*")) {
+                // Replace empty key with "type" key to fix the structure
+                sanitized = sanitized.replaceAll(draconicPattern, "{\"type\": \"$1\"}");
+                wasModified = true;
+                
+                if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+                    PlayerSync.LOGGER.info("[ITEM] Fixed Draconic Evolution config_properties corruption -> type key");
+                }
+            }
         }
 
         // Fix orphaned commas that might result from the above cleanup
@@ -1029,7 +1049,9 @@ public class VanillaSync {
             }
         }
         String json = new String(advancementBytes, StandardCharsets.UTF_8);
-        PlayerSync.LOGGER.trace("Storing advancements for player " + player_uuid + ": " + json);
+        if (JdbcConfig.DEBUG_ACHIEVEMENTS.get()) {
+            PlayerSync.LOGGER.info("[ADVANCE] Storing advancements for player {}: {}", player_uuid, json);
+        }
 
         // SQL Operation for player data
         if (init) {

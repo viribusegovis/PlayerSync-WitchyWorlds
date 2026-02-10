@@ -18,9 +18,9 @@ public class JDBCsetUp {
    private static final AtomicInteger activeConnections = new AtomicInteger(0);
 
    public static Connection getPooledConnection(boolean selectDatabase) throws SQLException {
-      // Debug mode connection pool logging
-      if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
-         LOGGER.info("[DEBUG] Requesting connection (selectDB={}). Pool size: {}, Active: {} (Max: {})", 
+      // Compressed connection pool logging
+      if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_CONNECTION_POOL.get()) {
+         LOGGER.info("[POOL] REQ sel={} pool={} active={}/{}", 
             selectDatabase, connectionPool.size(), activeConnections.get(), JdbcConfig.CONNECTION_POOL_MAX_SIZE.get());
       }
       
@@ -37,9 +37,8 @@ public class JDBCsetUp {
                Thread.sleep(poolTimeout);
                conn = connectionPool.poll();
                
-               if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
-                  LOGGER.info("[DEBUG] After {}ms wait, pool status - Size: {}, Active: {}", 
-                     poolTimeout, connectionPool.size(), activeConnections.get());
+               if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_CONNECTION_POOL.get()) {
+                  LOGGER.info("[POOL] WAIT {}ms pool={} active={}", poolTimeout, connectionPool.size(), activeConnections.get());
                }
             } catch (InterruptedException var3) {
                Thread.currentThread().interrupt();
@@ -51,12 +50,12 @@ public class JDBCsetUp {
             activeConnections.incrementAndGet();
             LOGGER.debug("Created new pooled connection. Active: {}", activeConnections.get());
             
-            if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
-               LOGGER.info("[DEBUG] Created new connection. Total active: {}", activeConnections.get());
+            if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_CONNECTION_POOL.get()) {
+               LOGGER.info("[POOL] NEW active={}", activeConnections.get());
             }
          }
-      } else if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
-         LOGGER.info("[DEBUG] Reused pooled connection. Remaining in pool: {}", connectionPool.size());
+      } else if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_CONNECTION_POOL.get()) {
+         LOGGER.info("[POOL] REUSE remaining={}", connectionPool.size());
       }
 
       return conn;
@@ -69,17 +68,15 @@ public class JDBCsetUp {
             if (!conn.isClosed() && connectionPool.size() < maxPoolSize) {
                connectionPool.offer(conn);
                
-               if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
-                  LOGGER.info("[DEBUG] Returned connection to pool. Pool size: {}, Active: {}", 
-                     connectionPool.size(), activeConnections.get());
+               if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_CONNECTION_POOL.get()) {
+                  LOGGER.info("[POOL] RET pool={} active={}", connectionPool.size(), activeConnections.get());
                }
             } else {
                conn.close();
                activeConnections.decrementAndGet();
                
-               if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
-                  LOGGER.info("[DEBUG] Closed connection (pool full or connection closed). Active: {}", 
-                     activeConnections.get());
+               if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_CONNECTION_POOL.get()) {
+                  LOGGER.info("[POOL] CLOSE active={}", activeConnections.get());
                }
             }
          } catch (SQLException var2) {
@@ -121,7 +118,7 @@ public class JDBCsetUp {
       
       // Debug mode logging
       if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
-         LOGGER.info("[DEBUG] Executing query: {}", sql);
+         LOGGER.info("[SQL] QUERY: {}", sql);
       }
       
       Connection connection = getConnection();
@@ -136,7 +133,7 @@ public class JDBCsetUp {
       
       // Debug mode logging
       if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
-         LOGGER.info("[DEBUG] Executing update (selectDB={}): {}", selectDatabase, sql);
+         LOGGER.info("[SQL] UPDATE sel={}: {}", selectDatabase, sql);
       }
       
       Connection connection = null;
