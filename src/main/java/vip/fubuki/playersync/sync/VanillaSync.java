@@ -47,6 +47,7 @@ import vip.fubuki.playersync.sync.addons.ModsSupport;
 import vip.fubuki.playersync.util.JDBCsetUp;
 import vip.fubuki.playersync.util.LocalJsonUtil;
 import vip.fubuki.playersync.util.PSThreadPoolFactory;
+import vip.fubuki.playersync.util.FailedItemLogger;
 
 import java.io.File;
 import java.io.IOException;
@@ -298,33 +299,66 @@ public class VanillaSync {
 
                 // Restore left-hand item
                 String leftHandEncoded = rs2.getString("left_hand");
-                serverPlayer.setItemInHand(InteractionHand.OFF_HAND,
-                        deserializeAndCreatePlaceholderIfNeeded(leftHandEncoded));
+                ItemStack leftHandItem = deserializeAndCreatePlaceholderIfNeeded(leftHandEncoded);
+                if (leftHandItem.is(Items.PAPER) && leftHandItem.getComponents().has(DataComponents.CUSTOM_DATA)
+                        && leftHandItem.getComponents().get(DataComponents.CUSTOM_DATA).contains("playersync:original_item_nbt")) {
+                    // Log failed item restoration
+                    String originalItemId = leftHandItem.getComponents().get(DataComponents.CUSTOM_DATA).copyTag().getString("playersync:original_item_id");
+                    FailedItemLogger.saveFailedItem(java.util.UUID.fromString(player_uuid), "left_hand", leftHandEncoded, "Item deserialization failed - created placeholder", "Original item: " + originalItemId);
+                }
+                serverPlayer.setItemInHand(InteractionHand.OFF_HAND, leftHandItem);
 
                 // Restore cursor item
                 String cursorsEncoded = rs2.getString("cursors");
-                serverPlayer.containerMenu.setCarried(
-                        deserializeAndCreatePlaceholderIfNeeded(cursorsEncoded));
+                ItemStack cursorItem = deserializeAndCreatePlaceholderIfNeeded(cursorsEncoded);
+                if (cursorItem.is(Items.PAPER) && cursorItem.getComponents().has(DataComponents.CUSTOM_DATA)
+                        && cursorItem.getComponents().get(DataComponents.CUSTOM_DATA).contains("playersync:original_item_nbt")) {
+                    // Log failed item restoration
+                    String originalItemId = cursorItem.getComponents().get(DataComponents.CUSTOM_DATA).copyTag().getString("playersync:original_item_id");
+                    FailedItemLogger.saveFailedItem(java.util.UUID.fromString(player_uuid), "cursor", cursorsEncoded, "Item deserialization failed - created placeholder", "Original item: " + originalItemId);
+                }
+                serverPlayer.containerMenu.setCarried(cursorItem);
 
                 // Restore armor
                 String armor_data = rs2.getString("armor");
                 if (armor_data.length() > 2) {
                     Map<Integer, String> equipment = LocalJsonUtil.StringToEntryMap(armor_data);
                     for (Map.Entry<Integer, String> entry : equipment.entrySet()) {
-                        serverPlayer.getInventory().armor.set(entry.getKey(), deserializeAndCreatePlaceholderIfNeeded(entry.getValue()));
+                        ItemStack armorItem = deserializeAndCreatePlaceholderIfNeeded(entry.getValue());
+                        if (armorItem.is(Items.PAPER) && armorItem.getComponents().has(DataComponents.CUSTOM_DATA)
+                                && armorItem.getComponents().get(DataComponents.CUSTOM_DATA).contains("playersync:original_item_nbt")) {
+                            // Log failed item restoration
+                            String originalItemId = armorItem.getComponents().get(DataComponents.CUSTOM_DATA).copyTag().getString("playersync:original_item_id");
+                            FailedItemLogger.saveFailedItem(java.util.UUID.fromString(player_uuid), "armor", entry.getValue(), "Item deserialization failed - created placeholder", "Armor slot: " + entry.getKey() + ", Original item: " + originalItemId);
+                        }
+                        serverPlayer.getInventory().armor.set(entry.getKey(), armorItem);
                     }
                 }
 
                 // Restore inventory
                 Map<Integer, String> inventory = LocalJsonUtil.StringToEntryMap(rs2.getString("inventory"));
                 for (Map.Entry<Integer, String> entry : inventory.entrySet()) {
-                    serverPlayer.getInventory().setItem(entry.getKey(), deserializeAndCreatePlaceholderIfNeeded(entry.getValue()));
+                    ItemStack inventoryItem = deserializeAndCreatePlaceholderIfNeeded(entry.getValue());
+                    if (inventoryItem.is(Items.PAPER) && inventoryItem.getComponents().has(DataComponents.CUSTOM_DATA)
+                            && inventoryItem.getComponents().get(DataComponents.CUSTOM_DATA).contains("playersync:original_item_nbt")) {
+                        // Log failed item restoration
+                        String originalItemId = inventoryItem.getComponents().get(DataComponents.CUSTOM_DATA).copyTag().getString("playersync:original_item_id");
+                        FailedItemLogger.saveFailedInventoryItem(java.util.UUID.fromString(player_uuid), entry.getValue(), "Item deserialization failed - created placeholder", entry.getKey());
+                    }
+                    serverPlayer.getInventory().setItem(entry.getKey(), inventoryItem);
                 }
 
                 // Restore Ender Chest
                 Map<Integer, String> ender_chest = LocalJsonUtil.StringToEntryMap(rs2.getString("enderchest"));
                 for (Map.Entry<Integer, String> entry : ender_chest.entrySet()) {
-                    serverPlayer.getEnderChestInventory().setItem(entry.getKey(), deserializeAndCreatePlaceholderIfNeeded(entry.getValue()));
+                    ItemStack enderItem = deserializeAndCreatePlaceholderIfNeeded(entry.getValue());
+                    if (enderItem.is(Items.PAPER) && enderItem.getComponents().has(DataComponents.CUSTOM_DATA)
+                            && enderItem.getComponents().get(DataComponents.CUSTOM_DATA).contains("playersync:original_item_nbt")) {
+                        // Log failed item restoration
+                        String originalItemId = enderItem.getComponents().get(DataComponents.CUSTOM_DATA).copyTag().getString("playersync:original_item_id");
+                        FailedItemLogger.saveFailedItem(java.util.UUID.fromString(player_uuid), "enderchest", entry.getValue(), "Item deserialization failed - created placeholder", "Slot: " + entry.getKey() + ", Original item: " + originalItemId);
+                    }
+                    serverPlayer.getEnderChestInventory().setItem(entry.getKey(), enderItem);
                 }
 
                 // Restore Effects
@@ -351,6 +385,10 @@ public class VanillaSync {
             rs1.close();
             qr1.close();
             PlayerSync.LOGGER.info("Sync data for player {} completed.", player_uuid);
+            
+            // Create summary of any failed items for this player
+            FailedItemLogger.createPlayerSummary(java.util.UUID.fromString(player_uuid));
+            
             syncNotCompletedPlayer.remove(player_uuid);
         } catch (Exception e) {
             PlayerSync.LOGGER.error("Internal Exception detected!", e);

@@ -40,6 +40,7 @@ public class JdbcConfig {
    public static BooleanValue DEBUG_MODE;
    public static BooleanValue DEBUG_CONNECTION_POOL;
    public static BooleanValue DEBUG_ACHIEVEMENTS;
+   public static BooleanValue SAVE_FAILED_ITEMS;
    
    // Connection Pool Configuration
    public static IntValue CONNECTION_POOL_MAX_SIZE;
@@ -150,6 +151,14 @@ public class JdbcConfig {
                "Disabled by default to reduce log spam from advancement data"
             }
          ).define("debug_achievements", false);
+      SAVE_FAILED_ITEMS = COMMON_BUILDER.comment(
+            new String[]{
+               "Save failed item data to debug/failed_items/ folder for analysis",
+               "Creates individual files with corrupted NBT data and metadata",
+               "Useful for identifying specific items causing corruption issues",
+               "Files include timestamp, player UUID, and original serialized data"
+            }
+         ).define("save_failed_items", false);
       COMMON_BUILDER.pop();
 
       // Connection Pool Configuration

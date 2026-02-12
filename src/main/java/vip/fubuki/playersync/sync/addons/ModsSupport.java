@@ -15,6 +15,7 @@ import vip.fubuki.playersync.PlayerSync;
 import vip.fubuki.playersync.sync.VanillaSync;
 import vip.fubuki.playersync.util.JDBCsetUp;
 import vip.fubuki.playersync.util.LocalJsonUtil;
+import vip.fubuki.playersync.util.FailedItemLogger;
 import vip.fubuki.playersync.config.JdbcConfig;
 
 import java.sql.ResultSet;
@@ -69,7 +70,7 @@ public class ModsSupport {
                                 
                                 // Enhanced approach: Process backpack contents with individual item protection
                                 // This prevents single corrupted items from wiping entire backpack contents
-                                CompoundTag safeBackpackNbt = processBackpackContentsWithIndividualItemProtection(backpackNbt);
+                                CompoundTag safeBackpackNbt = processBackpackContentsWithIndividualItemProtection(backpackNbt, player.getUUID(), contentsUuid);
                                 
                                 net.p3pp3rf1y.sophisticatedbackpacks.backpack.BackpackStorage.get().setBackpackContents(contentsUuid, safeBackpackNbt);
                                 
@@ -84,6 +85,10 @@ public class ModsSupport {
                                     PlayerSync.LOGGER.error("[BACKPACK] NBT parse FAIL uuid={} err={} data={}", contentsUuid, e.getMessage(), serialized.substring(0, Math.min(100, serialized.length())));
                                 }
                                 PlayerSync.LOGGER.error("Error parsing backpack NBT for UUID " + contentsUuid + ". Attempting recovery with individual item processing.", e);
+                                
+                                // Save failed backpack data for analysis
+                                FailedItemLogger.saveFailedBackpackItem(player.getUUID(), contentsUuid, serialized, 
+                                    e.getMessage(), "Full backpack NBT parsing failed - CommandSyntaxException");
                                 
                                 // Try to recover individual items even when full NBT parsing fails
                                 CompoundTag recoveredNbt = attemptBackpackItemRecovery(serialized, contentsUuid);
@@ -178,6 +183,11 @@ public class ModsSupport {
                                     compositeKey, e.getMessage(), e.getClass().getSimpleName());
                             }
                             PlayerSync.LOGGER.error("Error deserializing Curio data for key " + compositeKey + ". Skipping this item to prevent inventory loss.", e);
+                            
+                            // Save failed Curios data for analysis
+                            FailedItemLogger.saveFailedCurioItem(player.getUUID(), slotType, slotIndex, serialized, 
+                                e.getClass().getSimpleName() + ": " + e.getMessage());
+                            
                             // Skip this item instead of crashing - this preserves other items in the inventory
                         }
                     }
@@ -229,7 +239,7 @@ public class ModsSupport {
      * Processes backpack contents with individual item protection to prevent
      * single corrupted items from wiping entire backpack contents.
      */
-    private CompoundTag processBackpackContentsWithIndividualItemProtection(CompoundTag originalBackpackNbt) {
+    private CompoundTag processBackpackContentsWithIndividualItemProtection(CompoundTag originalBackpackNbt, UUID playerUuid, UUID backpackUuid) {
         CompoundTag safeBackpackNbt = originalBackpackNbt.copy();
         
         if (JdbcConfig.DEBUG_MODE.get()) {
@@ -239,12 +249,12 @@ public class ModsSupport {
         // Process inventory structure if it exists
         if (safeBackpackNbt.contains("inventory")) {
             CompoundTag inventoryTag = safeBackpackNbt.getCompound("inventory");
-            safeBackpackNbt.put("inventory", processBackpackInventoryItems(inventoryTag));
+            safeBackpackNbt.put("inventory", processBackpackInventoryItems(inventoryTag, playerUuid, backpackUuid));
         }
         
         // Also process direct Items array (some backpack versions)
         if (safeBackpackNbt.contains("Items")) {
-            safeBackpackNbt = processBackpackInventoryItems(safeBackpackNbt);
+            safeBackpackNbt = processBackpackInventoryItems(safeBackpackNbt, playerUuid, backpackUuid);
         }
         
         return safeBackpackNbt;
@@ -253,7 +263,7 @@ public class ModsSupport {
     /**
      * Safely processes individual items in backpack inventory, replacing corrupted ones with placeholders
      */
-    private CompoundTag processBackpackInventoryItems(CompoundTag inventoryTag) {
+    private CompoundTag processBackpackInventoryItems(CompoundTag inventoryTag, UUID playerUuid, UUID backpackUuid) {
         CompoundTag safeInventoryTag = inventoryTag.copy();
         
         if (safeInventoryTag.contains("Items")) {
@@ -305,6 +315,13 @@ public class ModsSupport {
                             if (JdbcConfig.DEBUG_MODE.get()) {
                                 PlayerSync.LOGGER.warn("[DEBUG] Failed to process backpack item at index {}: {}. Skipping item.", i, e.getMessage());
                             }
+                            
+                            // Save failed individual backpack item for analysis
+                            String itemId = itemCompound.contains("id") ? itemCompound.getString("id") : "unknown";
+                            FailedItemLogger.saveFailedBackpackItem(playerUuid, backpackUuid, itemCompound.toString(), 
+                                e.getClass().getSimpleName() + ": " + e.getMessage(), 
+                                "Individual item processing failed - Index: " + i + ", Item ID: " + itemId);
+                            
                             // Skip this item entirely if even placeholder creation fails
                             placeholderItems++;
                         }
