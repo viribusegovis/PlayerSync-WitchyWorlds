@@ -20,7 +20,25 @@
       "Bash(git remote add:*)",
       "Bash(git branch:*)",
       "Bash(git push:*)",
-      "Bash(.gradlew.bat compileJava)"
+      "Bash(.gradlew.bat compileJava)",
+      "Bash(\"C:/Program Files/Java/jdk-21/bin/java.exe\" -version)",
+      "Bash(JAVA_HOME=\"C:/Program Files/Java/jdk-21\" ./gradlew build --no-daemon)",
+      "Bash(wc:*)",
+      "Bash(tail:*)",
+      "Bash(JAVA_HOME=\"C:/Program Files/Java/jdk-21\" ./gradlew compileJava)",
+      "WebFetch(domain:github.com)",
+      "Bash(find:*)",
+      "Bash(grep -n \"executeUpdate.*boolean.*sqlFormatString.*args\" src/main/java/vip/fubuki/playersync/util/JDBCsetUp.java)",
+      "WebFetch(domain:docs.feed-the-beast.com)",
+      "WebFetch(domain:wiki.latvian.dev)",
+      "Bash(.gradlew compileJava)",
+      "WebFetch(domain:docs.feed-the-beast.com)",
+      "WebFetch(domain:wiki.latvian.dev)",
+      "WebFetch(domain:modrinth.com)",
+      "WebFetch(domain:ggservers.com)",
+      "Bash(rg:*)",
+      "WebFetch(domain:minecraft.fandom.com)",
+      "Bash(python:*)"
     ],
     "deny": []
   }

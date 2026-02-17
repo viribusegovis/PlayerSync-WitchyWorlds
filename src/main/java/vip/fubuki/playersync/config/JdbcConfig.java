@@ -40,7 +40,14 @@ public class JdbcConfig {
    public static BooleanValue DEBUG_MODE;
    public static BooleanValue DEBUG_CONNECTION_POOL;
    public static BooleanValue DEBUG_ACHIEVEMENTS;
+   public static BooleanValue DEBUG_FTB_QUESTS;
+   public static BooleanValue DEBUG_BACKPACKS;
+   public static BooleanValue DEBUG_COBBLEMON;
+   public static BooleanValue DEBUG_CURIOS;
    public static BooleanValue SAVE_FAILED_ITEMS;
+   
+   // FTB Quests Configuration
+   public static ConfigValue<String> FTB_QUESTS_DATA_TYPE;
    
    // Connection Pool Configuration
    public static IntValue CONNECTION_POOL_MAX_SIZE;
@@ -132,25 +139,56 @@ public class JdbcConfig {
       COMMON_BUILDER.comment("Debug and development settings").push("debug");
       DEBUG_MODE = COMMON_BUILDER.comment(
             new String[]{
-               "Enable debug mode for verbose logging",
-               "Shows detailed database operations, backpack processing, and data processing",
-               "WARNING: May generate large log files - use only for troubleshooting"
+               "Global debug mode - enables ALL debug logging when true",
+               "Shows detailed operations across all PlayerSync features",
+               "WARNING: May generate large log files - use only for troubleshooting",
+               "Individual debug flags below can be enabled independently of this setting"
             }
          ).define("debug_mode", false);
+      
+      COMMON_BUILDER.comment("Granular debug settings - each can be enabled independently").push("granular");
       DEBUG_CONNECTION_POOL = COMMON_BUILDER.comment(
             new String[]{
                "Enable debug logging for database connection pool operations",
                "Shows connection requests, pool status, and connection lifecycle",
-               "Can be disabled separately from main debug mode to reduce log spam"
+               "Enabled when: debug_mode=true OR debug_connection_pool=true"
             }
          ).define("debug_connection_pool", false);
       DEBUG_ACHIEVEMENTS = COMMON_BUILDER.comment(
             new String[]{
                "Enable debug logging for advancement/achievement synchronization",
                "Shows detailed advancement processing and JSON parsing operations",
-               "Disabled by default to reduce log spam from advancement data"
+               "Enabled when: debug_mode=true OR debug_achievements=true"
             }
          ).define("debug_achievements", false);
+      DEBUG_FTB_QUESTS = COMMON_BUILDER.comment(
+            new String[]{
+               "Enable debug logging for FTB Quests synchronization",
+               "Shows detailed quest data extraction, restoration, and API discovery",
+               "Enabled when: debug_mode=true OR debug_ftb_quests=true"
+            }
+         ).define("debug_ftb_quests", false);
+      DEBUG_BACKPACKS = COMMON_BUILDER.comment(
+            new String[]{
+               "Enable debug logging for Sophisticated Backpacks synchronization",
+               "Shows detailed backpack NBT processing and item recovery operations",
+               "Enabled when: debug_mode=true OR debug_backpacks=true"
+            }
+         ).define("debug_backpacks", false);
+      DEBUG_COBBLEMON = COMMON_BUILDER.comment(
+            new String[]{
+               "Enable debug logging for Cobblemon synchronization",
+               "Shows detailed Pokemon PC and Pokedex data processing",
+               "Enabled when: debug_mode=true OR debug_cobblemon=true"
+            }
+         ).define("debug_cobblemon", false);
+      DEBUG_CURIOS = COMMON_BUILDER.comment(
+            new String[]{
+               "Enable debug logging for Curios API synchronization",
+               "Shows detailed cosmetic slot processing and NBT operations",
+               "Enabled when: debug_mode=true OR debug_curios=true"
+            }
+         ).define("debug_curios", false);
       SAVE_FAILED_ITEMS = COMMON_BUILDER.comment(
             new String[]{
                "Save failed item data to debug/failed_items/ folder for analysis",
@@ -159,6 +197,19 @@ public class JdbcConfig {
                "Files include timestamp, player UUID, and original serialized data"
             }
          ).define("save_failed_items", false);
+      COMMON_BUILDER.pop();
+      
+      // FTB Quests Configuration
+      COMMON_BUILDER.comment("FTB Quests synchronization settings").push("ftb_quests");
+      FTB_QUESTS_DATA_TYPE = COMMON_BUILDER.comment(
+            new String[]{
+               "Database column type for FTB Quests data storage",
+               "LONGBLOB: Supports up to 4GB of quest data (recommended for large modpacks)",
+               "MEDIUMBLOB: Supports up to 16MB of quest data (suitable for most cases)",
+               "BLOB: Supports up to 64KB of quest data (only for very small quest books)",
+               "Change requires server restart and may need database migration"
+            }
+         ).define("quest_data_type", "LONGBLOB");
       COMMON_BUILDER.pop();
 
       // Connection Pool Configuration

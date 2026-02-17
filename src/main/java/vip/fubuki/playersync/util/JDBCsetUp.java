@@ -187,6 +187,40 @@ public class JDBCsetUp {
       }
    }
 
+   public static void executePreparedUpdate(String sql, Object... parameters) throws SQLException {
+      LOGGER.trace(sql);
+      Connection connection = null;
+
+      try {
+         connection = getConnection();
+
+         try (PreparedStatement updateStatement = connection.prepareStatement(sql)) {
+            for (int i = 0; i < parameters.length; i++) {
+               Object param = parameters[i];
+               if (param instanceof String) {
+                  updateStatement.setString(i + 1, (String) param);
+               } else if (param instanceof byte[]) {
+                  updateStatement.setBytes(i + 1, (byte[]) param);
+               } else if (param instanceof Integer) {
+                  updateStatement.setInt(i + 1, (Integer) param);
+               } else if (param instanceof Long) {
+                  updateStatement.setLong(i + 1, (Long) param);
+               } else if (param instanceof Boolean) {
+                  updateStatement.setBoolean(i + 1, (Boolean) param);
+               } else if (param == null) {
+                  updateStatement.setNull(i + 1, java.sql.Types.NULL);
+               } else {
+                  updateStatement.setObject(i + 1, param);
+               }
+            }
+
+            updateStatement.executeUpdate();
+         }
+      } finally {
+         returnConnection(connection);
+      }
+   }
+
    public record QueryResult(Connection connection, PreparedStatement preparedStatement, ResultSet resultSet) implements AutoCloseable {
       @Override
       public void close() {

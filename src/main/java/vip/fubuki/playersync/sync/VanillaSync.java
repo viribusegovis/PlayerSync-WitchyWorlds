@@ -23,6 +23,7 @@ import net.minecraft.world.effect.MobEffect;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.component.CustomData;
@@ -262,9 +263,10 @@ public class VanillaSync {
             ResultSet rs1 = qr1.resultSet();
             ServerPlayer serverPlayer = (ServerPlayer) event.getEntity();
 
-            // Mod support
+            // Mod support - restore addon data early to avoid conflicts
             ModsSupport modsSupport = new ModsSupport();
             modsSupport.doCuriosRestore(serverPlayer);
+            modsSupport.doFTBQuestsRestore(serverPlayer);
 
             if (!rs1.next()) {
                 store(event.getEntity(), true);
@@ -442,6 +444,17 @@ public class VanillaSync {
             
             compoundTag = NbtUtils.snbtToStructure(nbtString);
             
+            // Extract count information from parsed NBT for debugging
+            int parsedCount = 1;
+            if (compoundTag.contains("count")) {
+                parsedCount = compoundTag.getInt("count");
+            } else if (compoundTag.contains("Count")) {
+                parsedCount = compoundTag.getInt("Count");
+            }
+            
+            PlayerSync.LOGGER.info("[STACK_DEBUG] NBT parsed successfully - id={}, count={}", 
+                compoundTag.contains("id") ? compoundTag.getString("id") : "NO_ID", parsedCount);
+            
             if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
                 PlayerSync.LOGGER.info("[ITEM] NBT parsed OK, id={}", compoundTag.contains("id") ? compoundTag.getString("id") : "NO_ID");
             }
@@ -491,6 +504,9 @@ public class VanillaSync {
                 logApothosisDebugInfo("ITEM_DESERIALIZATION_SUCCESS", restoredItem, 
                     "Restored from NBT: " + nbtString.substring(0, Math.min(100, nbtString.length())));
                 
+                PlayerSync.LOGGER.info("[STACK_DEBUG] Final restored ItemStack: item={}, count={}", 
+                    restoredItem.getItem(), restoredItem.getCount());
+                
                 return restoredItem;
             }
             
@@ -517,68 +533,98 @@ public class VanillaSync {
      * Attempts to create an ItemStack using a more lenient approach when ItemStack.parse fails
      */
     private static ItemStack createItemStackWithFallback(CompoundTag compoundTag, ResourceLocation registryName) {
+        // Extract count info for debugging
+        int nbtCount = 1;
+        if (compoundTag.contains("count")) {
+            nbtCount = compoundTag.getInt("count");
+        } else if (compoundTag.contains("Count")) {
+            nbtCount = compoundTag.getInt("Count");
+        }
+        
+        PlayerSync.LOGGER.info("[STACK_DEBUG] createItemStackWithFallback for {} - NBT count: {}", registryName, nbtCount);
+        
+        // CRITICAL FIX: Check if count exceeds vanilla max stack size
+        // If so, bypass ItemStack.parse() which silently resets high counts to 1
+        Item item = BuiltInRegistries.ITEM.get(registryName);
+        if (nbtCount > item.getDefaultMaxStackSize()) {
+            PlayerSync.LOGGER.info("[STACK_DEBUG] High count {} detected for {}, bypassing ItemStack.parse() and creating manually", 
+                nbtCount, registryName);
+            
+            // Skip ItemStack.parse() entirely and create manually to preserve high counts
+            // This will go directly to the fallback creation
+        } else {
+            try {
+                // First attempt: Try the standard ItemStack.parse method for normal counts
+                HolderLookup.Provider provider = ServerLifecycleHooks.getCurrentServer().registryAccess();
+                ItemStack parsed = ItemStack.parse(provider, compoundTag).orElse(ItemStack.EMPTY);
+                
+                PlayerSync.LOGGER.info("[STACK_DEBUG] ItemStack.parse result for {}: item={}, count={}", 
+                    registryName, parsed.getItem(), parsed.getCount());
+                
+                return parsed;
+            } catch (Exception e) {
+                PlayerSync.LOGGER.info("[STACK_DEBUG] ItemStack.parse failed for normal count, falling back to manual creation");
+            }
+        }
+        
+        // If we reach here, either count was too high or ItemStack.parse() failed
+        // Use manual fallback creation
+        PlayerSync.LOGGER.info("[STACK_DEBUG] ItemStack.parse failed, attempting manual fallback creation");
+        
         try {
-            // First attempt: Try the standard ItemStack.parse method
-            HolderLookup.Provider provider = ServerLifecycleHooks.getCurrentServer().registryAccess();
-            return ItemStack.parse(provider, compoundTag).orElse(ItemStack.EMPTY);
-        } catch (Exception e) {
-            if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
-                PlayerSync.LOGGER.info("[DEBUG] ItemStack.parse failed for {}, attempting fallback creation: {}", 
-                    registryName, e.getMessage());
+            // Fallback: Create ItemStack manually and apply custom data
+            ItemStack fallbackStack = new ItemStack(BuiltInRegistries.ITEM.get(registryName));
+            PlayerSync.LOGGER.info("[STACK_DEBUG] Created fallback ItemStack for {}, initial count: {}", 
+                registryName, fallbackStack.getCount());
+            
+            // Set count
+            if (compoundTag.contains("count", Tag.TAG_INT)) {
+                int countValue = compoundTag.getInt("count");
+                PlayerSync.LOGGER.info("[STACK_DEBUG] Setting count from 'count' field: {}", countValue);
+                fallbackStack.setCount(countValue);
+            } else if (compoundTag.contains("Count", Tag.TAG_INT)) {
+                int countValue = compoundTag.getInt("Count");
+                PlayerSync.LOGGER.info("[STACK_DEBUG] Setting count from 'Count' field: {}", countValue);
+                fallbackStack.setCount(countValue);
             }
             
-            try {
-                // Fallback: Create ItemStack manually and apply custom data
-                ItemStack fallbackStack = new ItemStack(BuiltInRegistries.ITEM.get(registryName));
+            PlayerSync.LOGGER.info("[STACK_DEBUG] Fallback stack after count setting: item={}, count={}", 
+                fallbackStack.getItem(), fallbackStack.getCount());
+            
+            // Handle components (new format)
+            if (compoundTag.contains("components", Tag.TAG_COMPOUND)) {
+                CompoundTag componentsTag = compoundTag.getCompound("components");
                 
-                // Set count
-                if (compoundTag.contains("count", Tag.TAG_INT)) {
-                    fallbackStack.setCount(compoundTag.getInt("count"));
-                } else if (compoundTag.contains("Count", Tag.TAG_INT)) {
-                    fallbackStack.setCount(compoundTag.getInt("Count"));
-                }
-                
-                // Handle components (new format)
-                if (compoundTag.contains("components", Tag.TAG_COMPOUND)) {
-                    CompoundTag componentsTag = compoundTag.getCompound("components");
-                    
-                    // Apply custom_data component if present
-                    if (componentsTag.contains("minecraft:custom_data", Tag.TAG_COMPOUND)) {
-                        CompoundTag customData = componentsTag.getCompound("minecraft:custom_data");
-                        CustomData.set(DataComponents.CUSTOM_DATA, fallbackStack, customData);
-                        
-                        if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
-                            PlayerSync.LOGGER.info("[DEBUG] Applied custom_data component to fallback {}: {}", 
-                                registryName, customData.toString());
-                        }
-                    }
-                    
-                    // Apply other common components that Apotheosis might use
-                    if (componentsTag.contains("minecraft:lore")) {
-                        // Handle lore component - this is complex so we'll skip for now
-                        if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
-                            PlayerSync.LOGGER.info("[DEBUG] Skipping lore component for fallback {}", registryName);
-                        }
-                    }
-                }
-                
-                // Handle legacy tag format (for backward compatibility)
-                if (compoundTag.contains("tag", Tag.TAG_COMPOUND)) {
-                    CompoundTag legacyTag = compoundTag.getCompound("tag");
-                    CustomData.set(DataComponents.CUSTOM_DATA, fallbackStack, legacyTag);
+                // Apply custom_data component if present
+                if (componentsTag.contains("minecraft:custom_data", Tag.TAG_COMPOUND)) {
+                    CompoundTag customData = componentsTag.getCompound("minecraft:custom_data");
+                    CustomData.set(DataComponents.CUSTOM_DATA, fallbackStack, customData);
                     
                     if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
-                        PlayerSync.LOGGER.info("[DEBUG] Applied legacy tag to fallback {}: {}", 
-                            registryName, legacyTag.toString());
+                        PlayerSync.LOGGER.info("[DEBUG] Applied custom_data component to fallback {}: {}", 
+                            registryName, customData.toString());
                     }
                 }
-                
-                return fallbackStack;
-            } catch (Exception fallbackException) {
-                PlayerSync.LOGGER.error("Fallback ItemStack creation also failed for {}: {}", 
-                    registryName, fallbackException.getMessage());
-                return ItemStack.EMPTY;
             }
+            
+            // Handle legacy tag format (for backward compatibility)
+            if (compoundTag.contains("tag", Tag.TAG_COMPOUND)) {
+                CompoundTag legacyTag = compoundTag.getCompound("tag");
+                CustomData.set(DataComponents.CUSTOM_DATA, fallbackStack, legacyTag);
+                
+                if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+                    PlayerSync.LOGGER.info("[DEBUG] Applied legacy tag to fallback {}: {}", 
+                        registryName, legacyTag.toString());
+                }
+            }
+            
+            PlayerSync.LOGGER.info("[STACK_DEBUG] Final fallback ItemStack: item={}, count={}", 
+                fallbackStack.getItem(), fallbackStack.getCount());
+            return fallbackStack;
+        } catch (Exception fallbackException) {
+            PlayerSync.LOGGER.error("[STACK_DEBUG] Fallback ItemStack creation also failed for {}: {}", 
+                registryName, fallbackException.getMessage());
+            return ItemStack.EMPTY;
         }
     }
 
@@ -587,10 +633,14 @@ public class VanillaSync {
      */
     private static ItemStack createPlaceholderItem(String serializedNbt, String itemId, int count) {
         ItemStack placeholder = new ItemStack(Items.PAPER);
+        
+        // Set the correct count on the placeholder item to preserve original stack size
+        placeholder.setCount(Math.max(count, 1));
 
         CompoundTag placeholderNbt = new CompoundTag();
         placeholderNbt.putString("playersync:original_item_nbt", serializedNbt);
         placeholderNbt.putString("playersync:original_item_id", itemId);
+        placeholderNbt.putInt("playersync:original_count", count); // Store original count for restoration
         placeholderNbt.putUUID("playersync:unique_id", UUID.randomUUID());
 
         CustomData.set(DataComponents.CUSTOM_DATA, placeholder, placeholderNbt);
@@ -1007,9 +1057,13 @@ public class VanillaSync {
         }
     }
 
+
     public static void store(Player player, boolean init) throws SQLException, IOException {
         String player_uuid = player.getUUID().toString();
         PlayerSync.LOGGER.info("Storing data for player " + player_uuid + " (init=" + init + ")");
+
+        // Note: High-count items are handled during individual item serialization
+        // to avoid modifying the actual player inventory
 
         // Basic Attributes
         int XP = getTotalExperience(player);

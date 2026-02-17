@@ -205,6 +205,55 @@ public class PlayerSync {
          backpackCheck.connection().close();
       }
 
+      if (ModList.get().isLoaded("ftbquests")) {
+         // Use configurable column type for FTB Quests data
+         String questDataType = (String)JdbcConfig.FTB_QUESTS_DATA_TYPE.get();
+         
+         if (JdbcConfig.DEBUG_MODE.get()) {
+            LOGGER.info("Creating FTB Quests table with quest_data type: {}", questDataType);
+         }
+         
+         JDBCsetUp.executeUpdate(
+            "CREATE TABLE IF NOT EXISTS " + dbName + ".ftb_quests (uuid CHAR(36) NOT NULL, team_id VARCHAR(36), quest_data " + questDataType + ", PRIMARY KEY (uuid));", 1
+         );
+         
+         // Check for existing columns and upgrade if needed (backward compatibility)
+         JDBCsetUp.QueryResult questCheck = JDBCsetUp.executeQuery(
+            "SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS " +
+            "WHERE TABLE_SCHEMA = '" + dbName + "' AND TABLE_NAME = 'ftb_quests'"
+         );
+         ResultSet rsQuests = questCheck.resultSet();
+         boolean hasTeamId = false;
+         boolean needsQuestDataUpgrade = false;
+         
+         while (rsQuests.next()) {
+            String columnName = rsQuests.getString("COLUMN_NAME");
+            String dataType = rsQuests.getString("DATA_TYPE");
+            
+            if ("team_id".equals(columnName)) {
+               hasTeamId = true;
+            }
+            if ("quest_data".equals(columnName) && !questDataType.equalsIgnoreCase(dataType)) {
+               needsQuestDataUpgrade = true;
+            }
+         }
+         
+         // Add team_id column if missing (for legacy installations)
+         if (!hasTeamId) {
+            LOGGER.info("Adding team_id column to ftb_quests table for team-based progression.");
+            JDBCsetUp.executeUpdate("ALTER TABLE " + dbName + ".ftb_quests ADD COLUMN team_id VARCHAR(36)", 1);
+         }
+         
+         // Upgrade quest_data column if different type configured
+         if (needsQuestDataUpgrade) {
+            LOGGER.info("Upgrading ftb_quests quest_data column to {} for quest data storage.", questDataType);
+            JDBCsetUp.executeUpdate("ALTER TABLE " + dbName + ".ftb_quests MODIFY COLUMN quest_data " + questDataType, 1);
+         }
+         
+         rsQuests.close();
+         questCheck.connection().close();
+      }
+
       // Upgrade player_data columns for scale and backward compatibility
       JDBCsetUp.QueryResult playerDataCheck = JDBCsetUp.executeQuery(
          "SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS " +
