@@ -266,7 +266,6 @@ public class VanillaSync {
             // Mod support - restore addon data early to avoid conflicts
             ModsSupport modsSupport = new ModsSupport();
             modsSupport.doCuriosRestore(serverPlayer);
-            modsSupport.doFTBQuestsRestore(serverPlayer);
 
             if (!rs1.next()) {
                 store(event.getEntity(), true);
@@ -444,7 +443,7 @@ public class VanillaSync {
             
             compoundTag = NbtUtils.snbtToStructure(nbtString);
             
-            // Extract count information from parsed NBT for debugging
+            // Extract count and other information from parsed NBT for debugging
             int parsedCount = 1;
             if (compoundTag.contains("count")) {
                 parsedCount = compoundTag.getInt("count");
@@ -452,8 +451,20 @@ public class VanillaSync {
                 parsedCount = compoundTag.getInt("Count");
             }
             
-            PlayerSync.LOGGER.info("[STACK_DEBUG] NBT parsed successfully - id={}, count={}", 
-                compoundTag.contains("id") ? compoundTag.getString("id") : "NO_ID", parsedCount);
+            String itemId = compoundTag.contains("id") ? compoundTag.getString("id") : "NO_ID";
+            
+            // Check for Forbidden Arcanus items during deserialization
+            if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+                boolean isForbiddenArcanus = itemId.contains("forbidden") || itemId.contains("arcanus");
+                if (isForbiddenArcanus) {
+                    PlayerSync.LOGGER.info("[STELLA_DEBUG] Deserializing F&A item: {} count: {}", itemId, parsedCount);
+                    
+                    // Check if unbreakable is present in the parsed NBT
+                    String fullNbtString = compoundTag.toString();
+                    boolean hasUnbreakableInParsedNbt = fullNbtString.contains("\"minecraft:unbreakable\"") || fullNbtString.contains("Unbreakable");
+                    PlayerSync.LOGGER.info("[STELLA_DEBUG] Parsed NBT contains unbreakable: {}", hasUnbreakableInParsedNbt);
+                }
+            }
             
             if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
                 PlayerSync.LOGGER.info("[ITEM] NBT parsed OK, id={}", compoundTag.contains("id") ? compoundTag.getString("id") : "NO_ID");
@@ -504,8 +515,34 @@ public class VanillaSync {
                 logApothosisDebugInfo("ITEM_DESERIALIZATION_SUCCESS", restoredItem, 
                     "Restored from NBT: " + nbtString.substring(0, Math.min(100, nbtString.length())));
                 
-                PlayerSync.LOGGER.info("[STACK_DEBUG] Final restored ItemStack: item={}, count={}", 
-                    restoredItem.getItem(), restoredItem.getCount());
+                // Enhanced debugging for final restored ItemStack, especially for Forbidden Arcanus
+                if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+                    String finalItemId = restoredItem.getItem().toString();
+                    boolean isForbiddenArcanus = finalItemId.contains("forbidden") || finalItemId.contains("arcanus");
+                    
+                    if (isForbiddenArcanus) {
+                        PlayerSync.LOGGER.info("[STELLA_DEBUG] Final restored F&A ItemStack: item={}, count={}", 
+                            restoredItem.getItem(), restoredItem.getCount());
+                        
+                        // Check if the final item still has unbreakable component
+                        boolean hasFinalUnbreakable = restoredItem.has(DataComponents.UNBREAKABLE);
+                        PlayerSync.LOGGER.info("[STELLA_DEBUG] Final ItemStack has unbreakable component: {}", hasFinalUnbreakable);
+                        
+                        // Check custom data component in final item
+                        if (restoredItem.has(DataComponents.CUSTOM_DATA)) {
+                            CompoundTag finalCustomData = restoredItem.get(DataComponents.CUSTOM_DATA).copyTag();
+                            String customDataStr = finalCustomData.toString();
+                            boolean hasFACustomData = customDataStr.contains("forbidden") || 
+                                                    customDataStr.contains("arcanus") || 
+                                                    customDataStr.contains("stella") || 
+                                                    customDataStr.contains("eternal");
+                            PlayerSync.LOGGER.info("[STELLA_DEBUG] Final ItemStack has F&A custom data: {} (data: {})", 
+                                hasFACustomData, customDataStr.length() > 100 ? customDataStr.substring(0, 100) + "..." : customDataStr);
+                        } else {
+                            PlayerSync.LOGGER.warn("[STELLA_DEBUG] Final F&A ItemStack has NO custom data component!");
+                        }
+                    }
+                }
                 
                 return restoredItem;
             }
@@ -541,15 +578,11 @@ public class VanillaSync {
             nbtCount = compoundTag.getInt("Count");
         }
         
-        PlayerSync.LOGGER.info("[STACK_DEBUG] createItemStackWithFallback for {} - NBT count: {}", registryName, nbtCount);
         
         // CRITICAL FIX: Check if count exceeds vanilla max stack size
         // If so, bypass ItemStack.parse() which silently resets high counts to 1
         Item item = BuiltInRegistries.ITEM.get(registryName);
         if (nbtCount > item.getDefaultMaxStackSize()) {
-            PlayerSync.LOGGER.info("[STACK_DEBUG] High count {} detected for {}, bypassing ItemStack.parse() and creating manually", 
-                nbtCount, registryName);
-            
             // Skip ItemStack.parse() entirely and create manually to preserve high counts
             // This will go directly to the fallback creation
         } else {
@@ -558,38 +591,28 @@ public class VanillaSync {
                 HolderLookup.Provider provider = ServerLifecycleHooks.getCurrentServer().registryAccess();
                 ItemStack parsed = ItemStack.parse(provider, compoundTag).orElse(ItemStack.EMPTY);
                 
-                PlayerSync.LOGGER.info("[STACK_DEBUG] ItemStack.parse result for {}: item={}, count={}", 
-                    registryName, parsed.getItem(), parsed.getCount());
                 
                 return parsed;
             } catch (Exception e) {
-                PlayerSync.LOGGER.info("[STACK_DEBUG] ItemStack.parse failed for normal count, falling back to manual creation");
+                // ItemStack.parse failed, fall back to manual creation
             }
         }
         
         // If we reach here, either count was too high or ItemStack.parse() failed
         // Use manual fallback creation
-        PlayerSync.LOGGER.info("[STACK_DEBUG] ItemStack.parse failed, attempting manual fallback creation");
         
         try {
             // Fallback: Create ItemStack manually and apply custom data
             ItemStack fallbackStack = new ItemStack(BuiltInRegistries.ITEM.get(registryName));
-            PlayerSync.LOGGER.info("[STACK_DEBUG] Created fallback ItemStack for {}, initial count: {}", 
-                registryName, fallbackStack.getCount());
             
             // Set count
             if (compoundTag.contains("count", Tag.TAG_INT)) {
                 int countValue = compoundTag.getInt("count");
-                PlayerSync.LOGGER.info("[STACK_DEBUG] Setting count from 'count' field: {}", countValue);
                 fallbackStack.setCount(countValue);
             } else if (compoundTag.contains("Count", Tag.TAG_INT)) {
                 int countValue = compoundTag.getInt("Count");
-                PlayerSync.LOGGER.info("[STACK_DEBUG] Setting count from 'Count' field: {}", countValue);
                 fallbackStack.setCount(countValue);
             }
-            
-            PlayerSync.LOGGER.info("[STACK_DEBUG] Fallback stack after count setting: item={}, count={}", 
-                fallbackStack.getItem(), fallbackStack.getCount());
             
             // Handle components (new format)
             if (compoundTag.contains("components", Tag.TAG_COMPOUND)) {
@@ -618,11 +641,38 @@ public class VanillaSync {
                 }
             }
             
-            PlayerSync.LOGGER.info("[STACK_DEBUG] Final fallback ItemStack: item={}, count={}", 
-                fallbackStack.getItem(), fallbackStack.getCount());
+            // Enhanced debugging for fallback ItemStack, especially for Forbidden Arcanus
+            if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
+                String fallbackItemId = fallbackStack.getItem().toString();
+                boolean isForbiddenArcanus = fallbackItemId.contains("forbidden") || fallbackItemId.contains("arcanus");
+                
+                if (isForbiddenArcanus) {
+                    PlayerSync.LOGGER.info("[STELLA_DEBUG] Fallback F&A ItemStack: item={}, count={}", 
+                        fallbackStack.getItem(), fallbackStack.getCount());
+                    
+                    // Check if the fallback item has unbreakable component
+                    boolean hasFallbackUnbreakable = fallbackStack.has(DataComponents.UNBREAKABLE);
+                    PlayerSync.LOGGER.info("[STELLA_DEBUG] Fallback ItemStack has unbreakable component: {}", hasFallbackUnbreakable);
+                    
+                    // Check custom data component in fallback item
+                    if (fallbackStack.has(DataComponents.CUSTOM_DATA)) {
+                        CompoundTag fallbackCustomData = fallbackStack.get(DataComponents.CUSTOM_DATA).copyTag();
+                        String customDataStr = fallbackCustomData.toString();
+                        boolean hasFACustomData = customDataStr.contains("forbidden") || 
+                                                customDataStr.contains("arcanus") || 
+                                                customDataStr.contains("stella") || 
+                                                customDataStr.contains("eternal");
+                        PlayerSync.LOGGER.info("[STELLA_DEBUG] Fallback ItemStack has F&A custom data: {} (data: {})", 
+                            hasFACustomData, customDataStr.length() > 100 ? customDataStr.substring(0, 100) + "..." : customDataStr);
+                    } else {
+                        PlayerSync.LOGGER.warn("[STELLA_DEBUG] Fallback F&A ItemStack has NO custom data component!");
+                    }
+                }
+            }
+            
             return fallbackStack;
         } catch (Exception fallbackException) {
-            PlayerSync.LOGGER.error("[STACK_DEBUG] Fallback ItemStack creation also failed for {}: {}", 
+            PlayerSync.LOGGER.error("Fallback ItemStack creation also failed for {}: {}", 
                 registryName, fallbackException.getMessage());
             return ItemStack.EMPTY;
         }
@@ -996,12 +1046,17 @@ public class VanillaSync {
             try {
                 String serializedNbt = serialize(serializeNBT(itemStack).toString());
                 
-                // Enhanced debugging for Apotheosis items
+                // Enhanced debugging for Apotheosis and Forbidden Arcanus items
                 if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
                     String itemId = itemStack.getItem().toString();
                     boolean isApothItem = itemId.contains("apotheosis") || 
                                         (itemStack.has(DataComponents.CUSTOM_DATA) && 
                                          itemStack.get(DataComponents.CUSTOM_DATA).copyTag().toString().contains("apotheosis"));
+                    boolean isForbiddenArcanus = itemId.contains("forbidden") || itemId.contains("arcanus") ||
+                                               (itemStack.has(DataComponents.CUSTOM_DATA) && 
+                                                itemStack.get(DataComponents.CUSTOM_DATA).copyTag().toString().contains("forbidden")) ||
+                                               itemStack.has(DataComponents.UNBREAKABLE);
+                    
                     if (isApothItem) {
                         PlayerSync.LOGGER.info("[DEBUG] Storing Apotheosis item: {} -> serialized length: {}", 
                             itemId, serializedNbt.length());
@@ -1010,6 +1065,29 @@ public class VanillaSync {
                         if (itemStack.has(DataComponents.CUSTOM_DATA)) {
                             CompoundTag customData = itemStack.get(DataComponents.CUSTOM_DATA).copyTag();
                             PlayerSync.LOGGER.info("[DEBUG] Custom data component: {}", customData.toString());
+                        }
+                    }
+                    
+                    if (isForbiddenArcanus) {
+                        PlayerSync.LOGGER.info("[STELLA_DEBUG] Storing F&A item: {} -> serialized length: {}", 
+                            itemId, serializedNbt.length());
+                        
+                        // Log unbreakable status
+                        boolean hasUnbreakable = itemStack.has(DataComponents.UNBREAKABLE);
+                        PlayerSync.LOGGER.info("[STELLA_DEBUG] Item has vanilla unbreakable: {}", hasUnbreakable);
+                        
+                        // Log custom data component details if present
+                        if (itemStack.has(DataComponents.CUSTOM_DATA)) {
+                            CompoundTag customData = itemStack.get(DataComponents.CUSTOM_DATA).copyTag();
+                            PlayerSync.LOGGER.info("[STELLA_DEBUG] Custom data component: {}", customData.toString());
+                            
+                            // Check for Forbidden Arcanus specific NBT tags
+                            if (customData.toString().contains("forbidden") || 
+                                customData.toString().contains("arcanus") ||
+                                customData.toString().contains("stella") ||
+                                customData.toString().contains("eternal")) {
+                                PlayerSync.LOGGER.info("[STELLA_DEBUG] Found F&A specific NBT data in custom component");
+                            }
                         }
                     }
                 }
@@ -1039,9 +1117,24 @@ public class VanillaSync {
                 boolean isApothItem = itemId.contains("apotheosis") || 
                                     (itemStack.has(DataComponents.CUSTOM_DATA) && 
                                      itemStack.get(DataComponents.CUSTOM_DATA).copyTag().toString().contains("apotheosis"));
+                boolean isForbiddenArcanus = itemId.contains("forbidden") || itemId.contains("arcanus") ||
+                                           (itemStack.has(DataComponents.CUSTOM_DATA) && 
+                                            itemStack.get(DataComponents.CUSTOM_DATA).copyTag().toString().contains("forbidden")) ||
+                                           itemStack.has(DataComponents.UNBREAKABLE);
+                
                 if (isApothItem) {
                     PlayerSync.LOGGER.info("[DEBUG] Serializing Apotheosis item: {} -> NBT: {}", 
                         itemId, compoundTag.toString());
+                }
+                
+                if (isForbiddenArcanus) {
+                    PlayerSync.LOGGER.info("[STELLA_DEBUG] Serializing F&A item: {} -> NBT: {}", 
+                        itemId, compoundTag.toString());
+                    
+                    // Check if unbreakable component is preserved in serialized NBT
+                    String nbtString = compoundTag.toString();
+                    boolean hasUnbreakableInNbt = nbtString.contains("\"minecraft:unbreakable\"") || nbtString.contains("Unbreakable");
+                    PlayerSync.LOGGER.info("[STELLA_DEBUG] Serialized NBT contains unbreakable: {}", hasUnbreakableInNbt);
                 }
             }
             

@@ -27,6 +27,7 @@ import java.sql.SQLException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 public class ModsSupport {
@@ -354,9 +355,13 @@ public class ModsSupport {
     /**
      * Restores the Curios inventory for a player.
      * Uses the same robust approach as main inventory - individual item error handling.
+     * Enhanced to handle Relics mod dynamic slot allocation and timing issues.
      */
     public void doCuriosRestore(Player player) throws SQLException {
         if (ModList.get().isLoaded("curios")) {
+            // Wait for Curios slots to be fully initialized, especially for Relics dynamic slots
+            waitForCuriosInitialization(player);
+            
             Optional<ICuriosItemHandler> handlerOpt = CuriosApi.getCuriosInventory(player);
             JDBCsetUp.QueryResult qr = JDBCsetUp.executeQuery("SELECT curios_item FROM curios WHERE uuid = '" + player.getUUID() + "'");
             ResultSet rs = qr.resultSet();
@@ -379,7 +384,17 @@ public class ModsSupport {
                 }
 
                 // Restore each saved item using the same robust approach as main inventory
+                if (JdbcConfig.DEBUG_MODE.get() || JdbcConfig.DEBUG_CURIOS.get()) {
+                    PlayerSync.LOGGER.info("[CURIOS_DEBUG] Restoring {} Curio items for player {}", 
+                        storedMap.size(), player.getUUID());
+                }
+                
                 handlerOpt.ifPresent(handler -> {
+                    if (JdbcConfig.DEBUG_MODE.get() || JdbcConfig.DEBUG_CURIOS.get()) {
+                        PlayerSync.LOGGER.info("[CURIOS_DEBUG] Available slot types during restore: {}", 
+                            handler.getCurios().keySet());
+                    }
+                    
                     for (Map.Entry<String, String> entry : storedMap.entrySet()) {
                         String compositeKey = entry.getKey();
                         String[] parts = compositeKey.split(":");
@@ -410,7 +425,33 @@ public class ModsSupport {
                                 ICurioStacksHandler stacksHandler = handler.getCurios().get(slotType);
                                 IDynamicStackHandler dynStacks = stacksHandler.getStacks();
                                 if (slotIndex < dynStacks.getSlots()) {
+                                    if (JdbcConfig.DEBUG_MODE.get() || JdbcConfig.DEBUG_CURIOS.get()) {
+                                        PlayerSync.LOGGER.info("[CURIOS_DEBUG] Restored item {} to slot {}:{}", 
+                                            stack.getItem(), slotType, slotIndex);
+                                    }
                                     dynStacks.setStackInSlot(slotIndex, stack);
+                                } else {
+                                    if (JdbcConfig.DEBUG_MODE.get() || JdbcConfig.DEBUG_CURIOS.get()) {
+                                        PlayerSync.LOGGER.warn("[CURIOS_DEBUG] Slot index {} out of bounds for slot type '{}' (max: {})", 
+                                            slotIndex, slotType, dynStacks.getSlots() - 1);
+                                    }
+                                }
+                            } else {
+                                if (JdbcConfig.DEBUG_MODE.get() || JdbcConfig.DEBUG_CURIOS.get()) {
+                                    PlayerSync.LOGGER.warn("[CURIOS_DEBUG] Slot type '{}' not found in current Curios handler! Available types: {}", 
+                                        slotType, handler.getCurios().keySet());
+                                }
+                                
+                                // Try to place item in an alternative compatible slot type
+                                boolean itemPlaced = tryPlaceInCompatibleSlot(handler, stack, slotType, player.getUUID());
+                                
+                                if (!itemPlaced) {
+                                    PlayerSync.LOGGER.warn("Curio slot type '{}' no longer exists - item {} will be lost!", 
+                                        slotType, stack.getItem());
+                                    
+                                    // Save lost item for analysis
+                                    FailedItemLogger.saveFailedCurioItem(player.getUUID(), slotType, slotIndex, serialized, 
+                                        "Slot type no longer exists in Curios handler");
                                 }
                             }
                         } catch (Exception e) {
@@ -452,11 +493,26 @@ public class ModsSupport {
         Map<String, String> flatMap = new HashMap<>();
 
         handlerOpt.ifPresent(handler -> {
+            if (JdbcConfig.DEBUG_MODE.get() || JdbcConfig.DEBUG_CURIOS.get()) {
+                PlayerSync.LOGGER.info("[CURIOS_DEBUG] Detected {} slot types for player {}", 
+                    handler.getCurios().size(), player.getUUID());
+            }
+            
             handler.getCurios().forEach((slotType, stacksHandler) -> {
                 IDynamicStackHandler dynStacks = stacksHandler.getStacks();
+                
+                if (JdbcConfig.DEBUG_MODE.get() || JdbcConfig.DEBUG_CURIOS.get()) {
+                    PlayerSync.LOGGER.info("[CURIOS_DEBUG] Processing slot type '{}' with {} slots", 
+                        slotType, dynStacks.getSlots());
+                }
+                
                 for (int i = 0; i < dynStacks.getSlots(); i++) {
                     ItemStack stack = dynStacks.getStackInSlot(i);
                     if (!stack.isEmpty()) {
+                        if (JdbcConfig.DEBUG_MODE.get() || JdbcConfig.DEBUG_CURIOS.get()) {
+                            PlayerSync.LOGGER.info("[CURIOS_DEBUG] Found item in slot {}:{} - {}", 
+                                slotType, i, stack.getItem());
+                        }
                         String serialized = VanillaSync.serialize(VanillaSync.serializeNBT(stack).toString());
                         flatMap.put(slotType + ":" + i, serialized);
                     }
@@ -526,4 +582,98 @@ public class ModsSupport {
     }
 
     // FTB Quests integration temporarily removed - to be implemented in future version
+    
+    /**
+     * Try to place a Curio item in a compatible alternative slot when the original slot type is missing.
+     * This handles cases where mod configurations change or Relics dynamic slots aren't available.
+     */
+    private boolean tryPlaceInCompatibleSlot(ICuriosItemHandler handler, ItemStack stack, String originalSlotType, UUID playerUUID) {
+        if (JdbcConfig.DEBUG_MODE.get() || JdbcConfig.DEBUG_CURIOS.get()) {
+            PlayerSync.LOGGER.info("[CURIOS_DEBUG] Attempting to place {} (originally {}) in compatible slot", 
+                stack.getItem(), originalSlotType);
+        }
+        
+        // Define compatible slot mappings - where items can be placed if original slot is missing
+        Map<String, String[]> compatibleSlots = Map.of(
+            "charm", new String[]{"charm", "back", "neck", "belt"}, // Charm items might fit in other accessory slots
+            "belt", new String[]{"belt", "back"}, // Belt items might fit in back slots
+            "hands", new String[]{"hands", "ring"}, // Hand items might fit in ring slots
+            "neck", new String[]{"neck", "charm"}, // Neck items might fit in charm slots
+            "back", new String[]{"back", "charm"} // Back items might fit in charm slots
+        );
+        
+        String[] alternatives = compatibleSlots.getOrDefault(originalSlotType, new String[]{originalSlotType});
+        
+        // Try each compatible slot type
+        for (String altSlotType : alternatives) {
+            if (handler.getCurios().containsKey(altSlotType)) {
+                ICurioStacksHandler stacksHandler = handler.getCurios().get(altSlotType);
+                IDynamicStackHandler dynStacks = stacksHandler.getStacks();
+                
+                // Look for an empty slot
+                for (int i = 0; i < dynStacks.getSlots(); i++) {
+                    if (dynStacks.getStackInSlot(i).isEmpty()) {
+                        dynStacks.setStackInSlot(i, stack);
+                        
+                        if (JdbcConfig.DEBUG_MODE.get() || JdbcConfig.DEBUG_CURIOS.get()) {
+                            PlayerSync.LOGGER.info("[CURIOS_DEBUG] Successfully placed {} in alternative slot {}:{}", 
+                                stack.getItem(), altSlotType, i);
+                        }
+                        PlayerSync.LOGGER.info("Placed Curio item {} in alternative slot '{}' (was '{}')", 
+                            stack.getItem(), altSlotType, originalSlotType);
+                        return true;
+                    }
+                }
+            }
+        }
+        
+        if (JdbcConfig.DEBUG_MODE.get() || JdbcConfig.DEBUG_CURIOS.get()) {
+            PlayerSync.LOGGER.warn("[CURIOS_DEBUG] No compatible slot found for {} (original: {})", 
+                stack.getItem(), originalSlotType);
+        }
+        return false;
+    }
+
+    /**
+     * Wait for Curios inventory to be fully initialized, especially important for Relics mod
+     * which adds dynamic slots (like charm slots from belts) that may not be immediately available.
+     */
+    private void waitForCuriosInitialization(Player player) {
+        if (!ModList.get().isLoaded("curios")) {
+            return;
+        }
+        
+        // Give Curios system time to initialize all slots, especially dynamic ones from Relics
+        try {
+            Thread.sleep(100); // Short delay to ensure slot initialization
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        
+        // Verify Curios handler is available and has expected slot types
+        Optional<ICuriosItemHandler> handlerOpt = CuriosApi.getCuriosInventory(player);
+        if (handlerOpt.isPresent()) {
+            ICuriosItemHandler handler = handlerOpt.get();
+            
+            if (JdbcConfig.DEBUG_MODE.get() || JdbcConfig.DEBUG_CURIOS.get()) {
+                PlayerSync.LOGGER.info("[CURIOS_DEBUG] Curios handler initialized with {} slot types: {}", 
+                    handler.getCurios().size(), handler.getCurios().keySet());
+            }
+            
+            // Check for common Relics slot types that should be available
+            Set<String> expectedRelicsSlots = Set.of("charm", "belt", "hands", "neck", "back");
+            Set<String> availableSlots = handler.getCurios().keySet();
+            
+            for (String relicsSlot : expectedRelicsSlots) {
+                if (availableSlots.contains(relicsSlot)) {
+                    if (JdbcConfig.DEBUG_MODE.get() || JdbcConfig.DEBUG_CURIOS.get()) {
+                        PlayerSync.LOGGER.info("[CURIOS_DEBUG] Found Relics slot type '{}' with {} slots", 
+                            relicsSlot, handler.getCurios().get(relicsSlot).getStacks().getSlots());
+                    }
+                }
+            }
+        } else {
+            PlayerSync.LOGGER.warn("Failed to get Curios inventory handler for player {}", player.getUUID());
+        }
+    }
 }

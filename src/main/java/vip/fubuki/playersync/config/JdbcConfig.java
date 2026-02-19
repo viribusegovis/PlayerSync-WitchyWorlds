@@ -132,6 +132,15 @@ public class JdbcConfig {
                "LONGBLOB recommended for nested backpack storage"
             }
          ).define("backpack_nbt_type", "LONGBLOB");
+      
+      FTB_QUESTS_DATA_TYPE = COMMON_BUILDER.comment(
+            new String[]{
+               "Database column type for FTB Quests data storage",
+               "Options: BLOB (64KB), MEDIUMBLOB (16MB), LONGBLOB (4GB)",
+               "LONGBLOB recommended for large modpacks with extensive quest books",
+               "Change requires server restart and may need database migration"
+            }
+         ).define("quest_data_type", "LONGBLOB");
 
       COMMON_BUILDER.pop();
 
@@ -197,19 +206,6 @@ public class JdbcConfig {
                "Files include timestamp, player UUID, and original serialized data"
             }
          ).define("save_failed_items", false);
-      COMMON_BUILDER.pop();
-      
-      // FTB Quests Configuration
-      COMMON_BUILDER.comment("FTB Quests synchronization settings").push("ftb_quests");
-      FTB_QUESTS_DATA_TYPE = COMMON_BUILDER.comment(
-            new String[]{
-               "Database column type for FTB Quests data storage",
-               "LONGBLOB: Supports up to 4GB of quest data (recommended for large modpacks)",
-               "MEDIUMBLOB: Supports up to 16MB of quest data (suitable for most cases)",
-               "BLOB: Supports up to 64KB of quest data (only for very small quest books)",
-               "Change requires server restart and may need database migration"
-            }
-         ).define("quest_data_type", "LONGBLOB");
       COMMON_BUILDER.pop();
 
       // Connection Pool Configuration

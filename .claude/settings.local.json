@@ -38,7 +38,9 @@
       "WebFetch(domain:ggservers.com)",
       "Bash(rg:*)",
       "WebFetch(domain:minecraft.fandom.com)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "WebFetch(domain:www.minecraft-guides.com)",
+      "WebFetch(domain:www.curseforge.com)"
     ],
     "deny": []
   }
