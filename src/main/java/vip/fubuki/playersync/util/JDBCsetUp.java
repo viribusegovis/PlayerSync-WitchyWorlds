@@ -20,23 +20,23 @@ public class JDBCsetUp {
    public static Connection getPooledConnection(boolean selectDatabase) throws SQLException {
       // Compressed connection pool logging
       if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_CONNECTION_POOL.get()) {
-         LOGGER.info("[POOL] REQ sel={} pool={} active={}/{}", 
+         LOGGER.info("[POOL] REQ sel={} pool={} active={}/{}",
             selectDatabase, connectionPool.size(), activeConnections.get(), JdbcConfig.CONNECTION_POOL_MAX_SIZE.get());
       }
-      
+
       int maxPoolSize = JdbcConfig.CONNECTION_POOL_MAX_SIZE.get();
       int poolTimeout = JdbcConfig.CONNECTION_POOL_TIMEOUT.get();
-      
+
       Connection conn = connectionPool.poll();
       if (conn == null || conn.isClosed()) {
          if (activeConnections.get() >= maxPoolSize) {
-            LOGGER.warn("Connection pool exhausted (Active: {}/{}), waiting {}ms for available connection...", 
+            LOGGER.warn("Connection pool exhausted (Active: {}/{}), waiting {}ms for available connection...",
                activeConnections.get(), maxPoolSize, poolTimeout);
 
             try {
                Thread.sleep(poolTimeout);
                conn = connectionPool.poll();
-               
+
                if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_CONNECTION_POOL.get()) {
                   LOGGER.info("[POOL] WAIT {}ms pool={} active={}", poolTimeout, connectionPool.size(), activeConnections.get());
                }
@@ -49,7 +49,7 @@ public class JDBCsetUp {
             conn = createNewConnection(selectDatabase);
             activeConnections.incrementAndGet();
             LOGGER.debug("Created new pooled connection. Active: {}", activeConnections.get());
-            
+
             if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_CONNECTION_POOL.get()) {
                LOGGER.info("[POOL] NEW active={}", activeConnections.get());
             }
@@ -67,14 +67,14 @@ public class JDBCsetUp {
          try {
             if (!conn.isClosed() && connectionPool.size() < maxPoolSize) {
                connectionPool.offer(conn);
-               
+
                if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_CONNECTION_POOL.get()) {
                   LOGGER.info("[POOL] RET pool={} active={}", connectionPool.size(), activeConnections.get());
                }
             } else {
                conn.close();
                activeConnections.decrementAndGet();
-               
+
                if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_CONNECTION_POOL.get()) {
                   LOGGER.info("[POOL] CLOSE active={}", activeConnections.get());
                }
@@ -113,14 +113,14 @@ public class JDBCsetUp {
    }
 
    public static QueryResult executeQuery(String sqlFormatString, Object... args) throws SQLException {
-      String sql = String.format(sqlFormatString, args);
+      String sql = sqlFormatString;
       LOGGER.trace(sql);
-      
+
       // Debug mode logging
       if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
          LOGGER.info("[SQL] QUERY: {}", sql);
       }
-      
+
       Connection connection = getConnection();
       PreparedStatement queryStatement = connection.prepareStatement(sql);
       ResultSet resultSet = queryStatement.executeQuery();
@@ -128,14 +128,14 @@ public class JDBCsetUp {
    }
 
    private static void executeUpdate(boolean selectDatabase, String sqlFormatString, Object... args) throws SQLException {
-      String sql = String.format(sqlFormatString, args);
+      String sql = sqlFormatString;
       LOGGER.trace(sql);
-      
+
       // Debug mode logging
       if (vip.fubuki.playersync.config.JdbcConfig.DEBUG_MODE.get()) {
          LOGGER.info("[SQL] UPDATE sel={}: {}", selectDatabase, sql);
       }
-      
+
       Connection connection = null;
 
       try {

@@ -106,14 +106,25 @@ public class VanillaSync {
             }
             File advancements = new File(gameDir,
                     "/advancements" + "/" + player_uuid + ".json");
-            byte[] bytes = advancementsResultSet.getString("advancements").getBytes();
+            String advancementJson = advancementsResultSet.getString("advancements");
+            byte[] bytes = advancementJson.getBytes(StandardCharsets.UTF_8); // Explicitly use UTF-8
             advancementsResultSet.close();
 
-            // only create advancements file if at least "{}" has been stored in the field
-            if (bytes.length < 2) {
-                if (JdbcConfig.DEBUG_ACHIEVEMENTS.get()) {
-                PlayerSync.LOGGER.info("[ADVANCE] Skip writing advancements for player " + player_uuid);
+            // Enhanced debugging for advancement restoration
+            if (JdbcConfig.DEBUG_ACHIEVEMENTS.get() || JdbcConfig.DEBUG_MODE.get()) {
+                PlayerSync.LOGGER.info("[ADVANCE_DEBUG] Retrieved advancement data for player {} - Length: {} bytes", 
+                    player_uuid, bytes.length);
+                // Count advancements instead of logging full JSON to avoid spam
+                int advancementCount = advancementJson.split("\"criteria\"").length - 1;
+                PlayerSync.LOGGER.info("[ADVANCE_DEBUG] Content summary: ~{} advancements", advancementCount);
             }
+
+            // only create advancements file if at least "{}" has been stored in the field
+            String trimmedJson = advancementJson.trim();
+            if (bytes.length < 2 || trimmedJson.equals("{}") || trimmedJson.equals("{ }")) {
+                if (JdbcConfig.DEBUG_ACHIEVEMENTS.get() || JdbcConfig.DEBUG_MODE.get()) {
+                    PlayerSync.LOGGER.info("ADVANCE-DEBUG: Skip writing advancements for player:{} - Data is empty/blank JSON", player_uuid);
+                }
                 return;
             }
 
@@ -140,28 +151,115 @@ public class VanillaSync {
                     return;
                 }
             }
-            if (JdbcConfig.DEBUG_ACHIEVEMENTS.get()) {
-                PlayerSync.LOGGER.info("[ADVANCE] Writing advancement file {} for player {}", advancements.toPath(), player_uuid);
-                PlayerSync.LOGGER.info("[ADVANCE] Data: {}", new String(bytes, StandardCharsets.UTF_8));
+            if (JdbcConfig.DEBUG_ACHIEVEMENTS.get() || JdbcConfig.DEBUG_MODE.get()) {
+                PlayerSync.LOGGER.info("[ADVANCE_DEBUG] Writing advancement file {} for player {}", advancements.toPath(), player_uuid);
+                // Only log a brief summary, not full content to avoid console spam
+                String content = new String(bytes, StandardCharsets.UTF_8);
+                int advancementCount = content.split("\"criteria\"").length - 1; // Rough count of advancements
+                PlayerSync.LOGGER.info("[ADVANCE_DEBUG] Data summary: {} bytes, ~{} advancements", bytes.length, advancementCount);
             }
-            Files.write(advancements.toPath(), bytes);
+            
+            try {
+                // Check if file already exists and backup its content for comparison
+                boolean fileExisted = advancements.exists();
+                String existingContent = "";
+                if (fileExisted) {
+                    existingContent = Files.readString(advancements.toPath(), StandardCharsets.UTF_8);
+                }
+                
+                Files.write(advancements.toPath(), bytes);
+                
+                if (JdbcConfig.DEBUG_ACHIEVEMENTS.get() || JdbcConfig.DEBUG_MODE.get()) {
+                    PlayerSync.LOGGER.info("[ADVANCE_DEBUG] Successfully wrote {} bytes to advancement file (existed: {})", 
+                        bytes.length, fileExisted);
+                    
+                    // Compare old vs new content to detect if we're overwriting with empty data
+                    String newContent = new String(bytes, StandardCharsets.UTF_8);
+                    if (fileExisted && !existingContent.isEmpty() && (newContent.equals("{}") || newContent.isEmpty())) {
+                        PlayerSync.LOGGER.warn("[ADVANCE_WARNING] Overwriting existing advancement data with empty/minimal data for player {}!", player_uuid);
+                        PlayerSync.LOGGER.warn("[ADVANCE_WARNING] Old content length: {}, New content: {}", existingContent.length(), newContent);
+                    }
+                }
 
-            // reload the json files on the server after updating them
-            PlayerAdvancements playeradvancements = serverPlayer.getAdvancements();
-            playeradvancements.reload(server.getAdvancements());
+                // Add slight delay before reloading to ensure file system has updated
+                try {
+                    Thread.sleep(50); // Small delay to ensure file is written
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                
+                // reload the json files on the server after updating them
+                PlayerAdvancements playeradvancements = serverPlayer.getAdvancements();
+                playeradvancements.reload(server.getAdvancements());
+                
+                if (JdbcConfig.DEBUG_ACHIEVEMENTS.get() || JdbcConfig.DEBUG_MODE.get()) {
+                    PlayerSync.LOGGER.info("[ADVANCE_DEBUG] Reloaded player advancements for {} after delay", player_uuid);
+                }
+            } catch (IOException e) {
+                PlayerSync.LOGGER.error("[ADVANCE_ERROR] Failed to write/reload advancements for {}: {}", player_uuid, e.getMessage());
+                if (JdbcConfig.DEBUG_ACHIEVEMENTS.get() || JdbcConfig.DEBUG_MODE.get()) {
+                    e.printStackTrace();
+                }
+            }
 
         } else {
-            if (JdbcConfig.DEBUG_ACHIEVEMENTS.get()) {
-                PlayerSync.LOGGER.info("[ADVANCE] Writing non-dedicated server advancement files");
+            if (JdbcConfig.DEBUG_ACHIEVEMENTS.get() || JdbcConfig.DEBUG_MODE.get()) {
+                PlayerSync.LOGGER.info("[ADVANCE_DEBUG] Writing non-dedicated server advancement files");
             }
+
+            String advancement_json = advancementsResultSet.getString("advancements");
+            byte[] bytes = advancement_json.getBytes(StandardCharsets.UTF_8);
+
+            String trimmedJson2 = advancement_json.trim();
+            if (bytes.length < 2 || trimmedJson2.equals("{}") || trimmedJson2.equals("{ }")) {
+                if (JdbcConfig.DEBUG_ACHIEVEMENTS.get() || JdbcConfig.DEBUG_MODE.get()) {
+                    PlayerSync.LOGGER.info("ADVANCE-DEBUG: Skip writing advancements for player:{} - Data is empty/blank JSON", player_uuid);
+                }
+                advancementsResultSet.close();
+                return;
+            }
+
             File[] files = scanAdvancementsFile(player_uuid, gameDir);
-            for (File file : files) {
-                if (file == null)
-                    continue;
-                byte[] bytes = advancementsResultSet.getString("advancements").getBytes();
-                Files.write(file.toPath(), bytes);
+            
+            if (JdbcConfig.DEBUG_ACHIEVEMENTS.get() || JdbcConfig.DEBUG_MODE.get()) {
+                PlayerSync.LOGGER.info("[ADVANCE_DEBUG] Found {} advancement files to update for player {}", 
+                    files != null ? files.length : 0, player_uuid);
             }
+            
+            if (files != null) {
+                for (File file : files) {
+                    if (file == null) continue;
+                    
+                    try {
+                        if (JdbcConfig.DEBUG_ACHIEVEMENTS.get() || JdbcConfig.DEBUG_MODE.get()) {
+                            PlayerSync.LOGGER.info("[ADVANCE_DEBUG] Writing to file: {}", file.getPath());
+                        }
+                        Files.write(file.toPath(), bytes);
+                    } catch (IOException e) {
+                        PlayerSync.LOGGER.error("[ADVANCE_ERROR] Failed to write advancement file {}: {}", 
+                            file.getPath(), e.getMessage());
+                        if (JdbcConfig.DEBUG_ACHIEVEMENTS.get() || JdbcConfig.DEBUG_MODE.get()) {
+                            e.printStackTrace();
+                        }
+                    }
+                }
+            }
+            
             advancementsResultSet.close();
+            
+            // Add slight delay before reloading to ensure file system has updated
+            try {
+                Thread.sleep(50); // Small delay to ensure files are written
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            
+            // Reload player advancements for non-dedicated server too
+            if (JdbcConfig.DEBUG_ACHIEVEMENTS.get() || JdbcConfig.DEBUG_MODE.get()) {
+                PlayerSync.LOGGER.info("[ADVANCE_DEBUG] Reloading player advancements for non-dedicated server after delay");
+            }
+            PlayerAdvancements playeradvancements = serverPlayer.getAdvancements();
+            playeradvancements.reload(server.getAdvancements());
         }
     }
 
@@ -258,9 +356,11 @@ public class VanillaSync {
             PlayerSync.LOGGER.info("Starting synchronization for player " + player_uuid);
 
             // First query: check basic player data
-            syncNotCompletedPlayer.add(player_uuid);
             JDBCsetUp.QueryResult qr1 = JDBCsetUp.executeQuery("SELECT online, last_server FROM player_data WHERE uuid='" + player_uuid + "'");
             ResultSet rs1 = qr1.resultSet();
+            // Mark sync in-progress AFTER the DB read succeeds, so a disconnect
+            // during the query still falls through to the normal doPlayerLogout save path.
+            syncNotCompletedPlayer.add(player_uuid);
             ServerPlayer serverPlayer = (ServerPlayer) event.getEntity();
 
             // Mod support - restore addon data early to avoid conflicts
@@ -970,6 +1070,12 @@ public class VanillaSync {
         String player_uuid = event.getEntity().getUUID().toString();
         if (deadPlayerWhileLogging.contains(player_uuid)) {
             PlayerSync.LOGGER.warn("A dead or dying player was kicked,which uuid is:{}", player_uuid);
+            // Still save advancements/data so progress isn't lost on next login
+            try {
+                store(event.getEntity(), false);
+            } catch (Exception e) {
+                PlayerSync.LOGGER.error("Failed to save data for dead player {}: {}", player_uuid, e.getMessage());
+            }
             JDBCsetUp.executeUpdate("UPDATE player_data SET online= '0' WHERE uuid='" + player_uuid + "'");
             deadPlayerWhileLogging.remove(player_uuid);
         } else if (syncNotCompletedPlayer.contains(player_uuid)) {
@@ -1222,27 +1328,41 @@ public class VanillaSync {
                     }
                 }
             }
-            if (!advancements.exists()) {
+            if (advancements == null) {
+                PlayerSync.LOGGER.error("Unable to locate advancements file for player " + player_uuid + " - no file found.");
+            } else if (!advancements.exists()) {
                 PlayerSync.LOGGER.warn("Advancements file for " + player_uuid + " does not exist (yet).");
-            }
-
-            if (advancements.exists()) {
+            } else {
                 PlayerSync.LOGGER.debug("Storing advancements for " + player_uuid + " from " + advancements.toPath());
                 advancementBytes = Files.readAllBytes(advancements.toPath());
-            } else {
-                PlayerSync.LOGGER.error("Unable to save advancements for player " + player_uuid);
             }
         }
         String json = new String(advancementBytes, StandardCharsets.UTF_8);
-        if (JdbcConfig.DEBUG_ACHIEVEMENTS.get()) {
-            PlayerSync.LOGGER.info("[ADVANCE] Storing advancements for player {}: {}", player_uuid, json);
+        if (JdbcConfig.DEBUG_ACHIEVEMENTS.get() || JdbcConfig.DEBUG_MODE.get()) {
+            PlayerSync.LOGGER.info("[ADVANCE_DEBUG] Storing advancements for player {} - Size: {} bytes", player_uuid, advancementBytes.length);
+            int advancementCount = json.split("\"criteria\"").length - 1;
+            PlayerSync.LOGGER.info("[ADVANCE_DEBUG] Content summary: ~{} advancements", advancementCount);
+        }
+
+        // Guard: never overwrite valid DB advancement data with empty/blank JSON
+        String trimmedJson = json.trim();
+        boolean advancementsValid = !json.isEmpty()
+                && advancementBytes.length >= 3
+                && !trimmedJson.equals("{}")
+                && !trimmedJson.equals("{ }");
+
+        if (!advancementsValid) {
+            PlayerSync.LOGGER.warn("[ADVANCE_WARNING] Skipping advancement DB write for player {} - data is empty/blank. Existing DB data will be preserved.", player_uuid);
         }
 
         // SQL Operation for player data
         if (init) {
-            JDBCsetUp.executeUpdate("INSERT INTO player_data (uuid,armor,inventory,enderchest,advancements,effects,xp,food_level,health,score,left_hand,cursors,online) VALUES ('" + player_uuid + "','" + equipment + "','" + inventoryMap + "','" + ender_chest + "','" + json + "','" + effectMap + "','" + XP + "','" + food_level + "','" + health + "','" + score + "','" + left_hand + "','" + cursors + "',online=true)");
-        } else {
+            JDBCsetUp.executeUpdate("INSERT INTO player_data (uuid,armor,inventory,enderchest,advancements,effects,xp,food_level,health,score,left_hand,cursors,online) VALUES ('" + player_uuid + "','" + equipment + "','" + inventoryMap + "','" + ender_chest + "','" + (advancementsValid ? json : "{}") + "','" + effectMap + "','" + XP + "','" + food_level + "','" + health + "','" + score + "','" + left_hand + "','" + cursors + "',online=true)");
+        } else if (advancementsValid) {
             JDBCsetUp.executeUpdate("UPDATE player_data SET inventory = '" + inventoryMap + "',armor='" + equipment + "' ,xp='" + XP + "',effects='" + effectMap + "',enderchest='" + ender_chest + "',score='" + score + "',food_level='" + food_level + "',health='" + health + "',advancements='" + json + "',left_hand='" + left_hand + "',cursors='" + cursors + "' WHERE uuid = '" + player_uuid + "'");
+        } else {
+            // Save everything EXCEPT advancements — preserves valid DB advancement data
+            JDBCsetUp.executeUpdate("UPDATE player_data SET inventory = '" + inventoryMap + "',armor='" + equipment + "' ,xp='" + XP + "',effects='" + effectMap + "',enderchest='" + ender_chest + "',score='" + score + "',food_level='" + food_level + "',health='" + health + "',left_hand='" + left_hand + "',cursors='" + cursors + "' WHERE uuid = '" + player_uuid + "'");
         }
     }
 
